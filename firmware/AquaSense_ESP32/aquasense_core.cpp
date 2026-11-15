@@ -134,3 +134,71 @@ int LogRing::since(uint32_t seq, LogEntry* out, int max) const {
   }
   return n;
 }
+
+// ---- Calibration -----------------------------------------------------------
+CalCheck checkCalibration(float candidateV, float spreadV, float currentClearV) {
+  if (!std::isfinite(currentClearV) || currentClearV <= 0.0f) currentClearV = 4.20f;
+  if (!std::isfinite(candidateV) || candidateV < 3.5f || candidateV > 4.8f) return CAL_OUT_OF_RANGE;
+  if (candidateV < currentClearV - 0.15f) return CAL_TOO_LOW;
+  if (!(spreadV <= 0.03f)) return CAL_UNSTABLE;  // NaN spread counts as unstable
+  return CAL_OK;
+}
+
+void CalSession::start(uint32_t nowMs) {
+  state_ = CAL_SETTLING;
+  last_ = CAL_OK;
+  candidate_ = std::nanf("");
+  n_ = 0;
+  startMs_ = nowMs;
+  readyMs_ = 0;
+}
+
+int CalSession::secondsStable() const {
+  if (state_ == CAL_IDLE || n_ == 0) return 0;
+  float lo = w_[n_ - 1], hi = w_[n_ - 1];
+  int count = 0;
+  for (int i = n_ - 1; i >= 0; i--) {
+    lo = std::min(lo, w_[i]);
+    hi = std::max(hi, w_[i]);
+    if (hi - lo > 0.03f) break;
+    count++;
+  }
+  return count > WINDOW ? WINDOW : count;
+}
+
+void CalSession::secondTick(float meanVolts, uint32_t nowMs, float currentClearV) {
+  if (state_ == CAL_READY) {
+    if (nowMs - readyMs_ > 60000u) state_ = CAL_EXPIRED;
+    return;
+  }
+  if (state_ != CAL_SETTLING) return;
+  if (nowMs - startMs_ > 300000u) { state_ = CAL_EXPIRED; return; }
+  if (!std::isfinite(meanVolts)) { n_ = 0; return; }
+  if (n_ == WINDOW) {
+    for (int i = 1; i < WINDOW; i++) w_[i - 1] = w_[i];
+    n_--;
+  }
+  w_[n_++] = meanVolts;
+  if (n_ < WINDOW) return;
+  float lo = w_[0], hi = w_[0], sum = 0.0f;
+  for (int i = 0; i < WINDOW; i++) {
+    lo = std::min(lo, w_[i]);
+    hi = std::max(hi, w_[i]);
+    sum += w_[i];
+  }
+  float mean = sum / WINDOW;
+  last_ = checkCalibration(mean, hi - lo, currentClearV);
+  if (last_ == CAL_OK) {
+    candidate_ = mean;
+    readyMs_ = nowMs;
+    state_ = CAL_READY;
+  } else if (last_ != CAL_UNSTABLE) {
+    candidate_ = mean;
+    state_ = CAL_REJECTED;
+  }
+}
+
+void CalSession::buttonPressed(uint32_t nowMs) {
+  if (state_ != CAL_READY) return;
+  state_ = (nowMs - readyMs_ > 60000u) ? CAL_EXPIRED : CAL_DONE;
+}

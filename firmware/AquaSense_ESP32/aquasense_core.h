@@ -100,3 +100,35 @@ class LogRing {
   uint32_t cap_;
   uint32_t last_;
 };
+
+// ---- Calibration -----------------------------------------------------------
+enum CalCheck { CAL_OK, CAL_UNSTABLE, CAL_OUT_OF_RANGE, CAL_TOO_LOW };
+
+// Order: range (3.5-4.8 V) -> too low (candidate < current - 0.15) -> stability
+// (spread > 0.03). A non-finite or <= 0 currentClearV is treated as 4.20 V.
+CalCheck checkCalibration(float candidateV, float spreadV, float currentClearV);
+
+enum CalState { CAL_IDLE, CAL_SETTLING, CAL_READY, CAL_DONE, CAL_REJECTED, CAL_EXPIRED };
+
+// Resident-initiated calibration. secondTick is called once per second with that
+// second's mean voltage. Timing uses wrap-safe unsigned millis subtraction.
+class CalSession {
+ public:
+  static const int WINDOW = 60;
+  void start(uint32_t nowMs);  // from any state: reset and enter SETTLING
+  void secondTick(float meanVolts, uint32_t nowMs, float currentClearV);
+  void buttonPressed(uint32_t nowMs);
+  CalState state() const { return state_; }
+  CalCheck lastCheck() const { return last_; }
+  float candidate() const { return candidate_; }  // NaN until READY/REJECTED
+  int secondsStable() const;  // trailing seconds with spread <= 0.03 V, cap 60
+
+ private:
+  CalState state_ = CAL_IDLE;
+  CalCheck last_ = CAL_OK;
+  float candidate_;
+  float w_[WINDOW];
+  int n_ = 0;  // oldest first; shifted when full
+  uint32_t startMs_ = 0;
+  uint32_t readyMs_ = 0;
+};

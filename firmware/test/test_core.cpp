@@ -128,12 +128,158 @@ static void test_logRing() {
   CHECK(sizeof(LogEntry) == 16);
 }
 
+// ---- Calibration -----------------------------------------------------------
+static void test_checkOrder() {
+  CHECK(checkCalibration(3.0f, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
+  CHECK(checkCalibration(4.9f, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
+  CHECK(checkCalibration(NAN_F, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
+  CHECK(checkCalibration(3.9f, 0.0f, 4.2f) == CAL_TOO_LOW);
+  CHECK(checkCalibration(4.15f, 0.05f, 4.2f) == CAL_UNSTABLE);
+  CHECK(checkCalibration(4.15f, 0.01f, 4.2f) == CAL_OK);
+  CHECK(checkCalibration(4.5f, 0.01f, 4.2f) == CAL_OK);  // higher is allowed
+  CHECK(checkCalibration(3.9f, 0.05f, 4.2f) == CAL_TOO_LOW);  // too-low before unstable
+  // invalid current clear volts falls back to factory 4.20 V
+  CHECK(checkCalibration(3.9f, 0.0f, NAN_F) == CAL_TOO_LOW);
+  CHECK(checkCalibration(3.9f, 0.0f, 0.0f) == CAL_TOO_LOW);
+  CHECK(checkCalibration(3.9f, 0.0f, -1.0f) == CAL_TOO_LOW);
+  CHECK(checkCalibration(4.15f, 0.0f, 0.0f) == CAL_OK);
+}
+
+// Feed n one-second ticks of v starting at t0 (1 s apart); returns last nowMs.
+static uint32_t feed(CalSession& c, int n, float v, uint32_t t0, float cur = 4.2f) {
+  uint32_t t = t0;
+  for (int i = 0; i < n; i++) { t += 1000; c.secondTick(v, t, cur); }
+  return t;
+}
+
+static void test_readyAfter60StableSeconds() {
+  CalSession c;
+  CHECK(c.state() == CAL_IDLE);
+  CHECK(c.secondsStable() == 0);
+  c.secondTick(4.2f, 1000, 4.2f);  // ignored while idle
+  CHECK(c.state() == CAL_IDLE);
+  c.start(0);
+  CHECK(c.state() == CAL_SETTLING);
+  CHECK(std::isnan(c.candidate()));
+  uint32_t t = feed(c, 59, 4.15f, 0);
+  CHECK(c.state() == CAL_SETTLING);
+  CHECK(c.secondsStable() == 59);
+  t = feed(c, 1, 4.15f, t);
+  CHECK(c.state() == CAL_READY);
+  CHECK(c.lastCheck() == CAL_OK);
+  CHECK(c.secondsStable() == 60);
+  CHECK(std::fabs(c.candidate() - 4.15f) < 1e-4f);
+}
+
+static void test_noisyStaysSettling() {
+  CalSession c;
+  c.start(0);
+  uint32_t t = 0;
+  for (int i = 0; i < 120; i++) { t += 1000; c.secondTick((i % 2) ? 4.0f : 4.2f, t, 4.2f); }
+  CHECK(c.state() == CAL_SETTLING);
+  CHECK(c.lastCheck() == CAL_UNSTABLE);
+  CHECK(c.secondsStable() <= 1);
+  // NaN breaks stability and clears the window
+  CalSession d;
+  d.start(0);
+  t = feed(d, 59, 4.2f, 0);
+  d.secondTick(NAN_F, t + 1000, 4.2f);
+  CHECK(d.secondsStable() == 0);
+  d.secondTick(4.2f, t + 2000, 4.2f);
+  CHECK(d.state() == CAL_SETTLING);
+  // settling timeout
+  CalSession e;
+  e.start(1000);
+  e.secondTick(4.0f, 1000 + 300000, 4.2f);
+  CHECK(e.state() == CAL_SETTLING);
+  e.secondTick(4.0f, 1000 + 300001, 4.2f);
+  CHECK(e.state() == CAL_EXPIRED);
+  e.secondTick(4.2f, 1000 + 300002, 4.2f);  // ignored once expired
+  CHECK(e.state() == CAL_EXPIRED);
+}
+
+static void test_dirtyWaterRejected() {
+  CalSession c;
+  c.start(0);
+  uint32_t t = feed(c, 60, 3.9f, 0);
+  CHECK(c.state() == CAL_REJECTED);
+  CHECK(c.lastCheck() == CAL_TOO_LOW);
+  CHECK(std::fabs(c.candidate() - 3.9f) < 1e-4f);
+  c.buttonPressed(t + 1000);  // button cannot rescue a rejection
+  CHECK(c.state() == CAL_REJECTED);
+  CalSession d;
+  d.start(0);
+  feed(d, 60, 3.0f, 0);
+  CHECK(d.state() == CAL_REJECTED);
+  CHECK(d.lastCheck() == CAL_OUT_OF_RANGE);
+}
+
+static void test_buttonConfirms() {
+  CalSession c;
+  c.start(0);
+  uint32_t t = feed(c, 60, 4.2f, 0);
+  CHECK(c.state() == CAL_READY);
+  c.buttonPressed(t + 60000);  // exactly 60 s is still in time
+  CHECK(c.state() == CAL_DONE);
+  c.secondTick(3.0f, t + 61000, 4.2f);  // ignored
+  CHECK(c.state() == CAL_DONE);
+  c.start(t + 70000);  // restart resets everything
+  CHECK(c.state() == CAL_SETTLING);
+  CHECK(c.secondsStable() == 0);
+  CHECK(std::isnan(c.candidate()));
+}
+
+static void test_buttonLateExpires() {
+  CalSession c;
+  c.start(0);
+  uint32_t t = feed(c, 60, 4.2f, 0);
+  c.buttonPressed(t + 61000);
+  CHECK(c.state() == CAL_EXPIRED);
+  // expiry also by tick
+  CalSession d;
+  d.start(0);
+  t = feed(d, 60, 4.2f, 0);
+  d.secondTick(4.2f, t + 60001, 4.2f);
+  CHECK(d.state() == CAL_EXPIRED);
+}
+
+static void test_buttonBeforeReadyIgnored() {
+  CalSession c;
+  c.buttonPressed(5);
+  CHECK(c.state() == CAL_IDLE);
+  c.start(0);
+  uint32_t t = feed(c, 30, 4.2f, 0);
+  c.buttonPressed(t);
+  CHECK(c.state() == CAL_SETTLING);
+  t = feed(c, 30, 4.2f, t);
+  CHECK(c.state() == CAL_READY);
+}
+
+static void test_calWrapAround() {
+  CalSession c;
+  const uint32_t start = 0xFFFFFFFFu - 20000u;
+  c.start(start);
+  uint32_t t = feed(c, 60, 4.2f, start);  // wraps past zero
+  CHECK(t < start);
+  CHECK(c.state() == CAL_READY);
+  c.buttonPressed(t + 59000);
+  CHECK(c.state() == CAL_DONE);
+}
+
 int main() {
   test_voltsToNtu();
   test_rollingMedian();
   test_medianOf();
   test_timeAnchors();
   test_logRing();
+  test_checkOrder();
+  test_readyAfter60StableSeconds();
+  test_noisyStaysSettling();
+  test_dirtyWaterRejected();
+  test_buttonConfirms();
+  test_buttonLateExpires();
+  test_buttonBeforeReadyIgnored();
+  test_calWrapAround();
   if (g_failures == 0) { std::printf("ALL PASSED\n"); return 0; }
   std::printf("%d FAILED\n", g_failures);
   return 1;
