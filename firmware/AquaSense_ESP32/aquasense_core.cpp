@@ -47,3 +47,90 @@ float RollingMedian::median() const {
 int RollingMedian::count() const { return count_; }
 
 void RollingMedian::clear() { head_ = 0; count_ = 0; }
+
+// ---- Time anchors ----------------------------------------------------------
+bool TimeAnchors::offer(uint16_t boot, uint32_t epoch, uint32_t uptimeS) {
+  if (epoch < MIN_EPOCH) return false;
+  if (has(boot)) return false;  // first offer wins; never modify an anchor
+  if (n_ == MAX_ANCHORS) {
+    for (int i = 1; i < n_; i++) a_[i - 1] = a_[i];
+    n_--;
+  }
+  a_[n_++] = Anchor{boot, epoch, uptimeS};
+  return true;
+}
+
+bool TimeAnchors::has(uint16_t boot) const {
+  for (int i = 0; i < n_; i++) if (a_[i].boot == boot) return true;
+  return false;
+}
+
+Anchor TimeAnchors::get(uint16_t boot) const {
+  for (int i = 0; i < n_; i++) if (a_[i].boot == boot) return a_[i];
+  return Anchor{0, 0, 0};
+}
+
+int TimeAnchors::all(Anchor* out, int max) const {
+  int k = n_ < max ? n_ : max;
+  for (int i = 0; i < k; i++) out[i] = a_[i];
+  return k;
+}
+
+void TimeAnchors::load(const Anchor* a, int n) {
+  if (n < 0) n = 0;
+  int skip = n > MAX_ANCHORS ? n - MAX_ANCHORS : 0;
+  n_ = 0;
+  for (int i = skip; i < n; i++) a_[n_++] = a[i];
+}
+
+// ---- Log ring --------------------------------------------------------------
+bool MemoryStore::read(uint32_t slot, LogEntry& e) {
+  if (slot >= v_.size()) return false;
+  e = v_[slot];
+  return true;
+}
+
+bool MemoryStore::write(uint32_t slot, const LogEntry& e) {
+  if (slot >= v_.size()) return false;
+  v_[slot] = e;
+  return true;
+}
+
+LogRing::LogRing(RecordStore& s, uint32_t capacity)
+    : s_(s), cap_(capacity < 1 ? 1 : capacity), last_(0) {}
+
+void LogRing::open(uint32_t lastSeq) { last_ = lastSeq; }
+
+uint32_t LogRing::append(uint16_t boot, uint32_t uptimeS, float value, uint8_t kind) {
+  LogEntry e;
+  e.seq = last_ + 1;
+  e.uptimeS = uptimeS;
+  e.value = value;
+  e.boot = boot;
+  e.kind = kind;
+  e.pad = 0;
+  s_.write((e.seq - 1) % cap_, e);
+  last_ = e.seq;
+  return e.seq;
+}
+
+uint32_t LogRing::lastSeq() const { return last_; }
+
+uint32_t LogRing::oldestSeq() const {
+  return last_ >= cap_ ? last_ - cap_ + 1 : 1;
+}
+
+int LogRing::since(uint32_t seq, LogEntry* out, int max) const {
+  if (last_ == 0 || max <= 0) return 0;
+  uint32_t first = seq + 1;
+  uint32_t oldest = oldestSeq();
+  if (seq >= last_) return 0;
+  if (first < oldest) first = oldest;
+  int n = 0;
+  for (uint32_t q = first; q <= last_ && n < max; q++) {
+    LogEntry e;
+    if (!s_.read((q - 1) % cap_, e)) break;
+    out[n++] = e;
+  }
+  return n;
+}
