@@ -15,7 +15,8 @@
     GET  /log?since=S&max=M {"boot":7,"uptime_s":3600,"last_seq":42,"oldest_seq":1,
                              "anchors":[[boot,epoch,uptime_s],...],
                              "entries":[[seq,boot,uptime_s,value,kind],...]}
-                            Minute log, oldest first, M default/max 200.
+                            Minute log, oldest first, M default/max 100 (response < ~4 KB;
+                            fewer entries if the buffer fills - page on with since=last seq).
                             kind 0 = minute median NTU, kind 1 = calibration (clear volts).
     POST /cal/start         {"state":"settling"}
     GET  /cal               {"state":"idle|settling|ready|done|rejected|expired",
@@ -27,8 +28,10 @@
   - Every 200 ms: trimmed mean of 30 ADC reads (~15 ms) -> NTU -> rolling median of 10.
     Below 0.3 V the sensor counts as unplugged and "turbidity" becomes null.
   - Every minute, the median of that minute's 60 per-second values is appended to a
-    7-day ring (10,080 entries) in LittleFS file /log.bin. If LittleFS fails the
-    live view keeps working and /log returns no entries.
+    7-day ring (10,080 entries) in 40 LittleFS segment files /log/00.bin../log/39.bin
+    (252 entries, one 4 KB flash block each, so an append rewrites one block).
+    If LittleFS fails the live view keeps working and /log returns no entries.
+    If log segments are ever recreated, "log_base" moves past the lost entries.
 
   Board: ESP32 Dev Module (esp32 core 3.x). No extra libraries.
 
@@ -41,6 +44,7 @@
                            GPIO34 (ratio = 30k/20k = 1.5)
      Set the sensor board switch to "A" (analog), not "D".
      Calibration confirm button: the board's own BOOT button (GPIO0), nothing to wire.
+     Don't hold the BOOT button while powering up (enters download mode).
 
   CALIBRATION (in the app: Settings -> Sensor care)
   -----------
@@ -55,7 +59,7 @@
   readings near the 5 NTU limit as "check again" and confirm with a lab turbidimeter.
 
   WATCHDOG
-  The loop task is watched by the ESP32 task watchdog (10 s). If loop() ever stops
+  The loop task is watched by the ESP32 task watchdog (30 s). If loop() ever stops
   (the field freeze seen on older firmware), the board panics and reboots by itself.
   Nothing in loop() may block for seconds.
 */
@@ -85,8 +89,8 @@ const char* DEFAULT_STATION  = "AquaSense Station";
 
 const unsigned long SAMPLE_MS   = 200;
 const unsigned long DEBOUNCE_MS = 50;
-const uint32_t      WDT_TIMEOUT_MS = 10000;
-const int           LOG_PAGE_MAX = 200;
+const uint32_t      WDT_TIMEOUT_MS = 30000;
+const int           LOG_PAGE_MAX = 100;
 
 WebServer   server(80);
 Preferences prefs;
@@ -102,6 +106,7 @@ float    calV = TURB_CLEAR_VOLTS;
 uint32_t calEpoch = 0;               // 0 = unknown
 uint32_t calUptimePending = 0;       // uptime of a calibration this boot awaiting an epoch
 bool     calEpochPending = false;
+uint32_t logBase = 0;                // seqs <= logBase were lost (log store recreated)
 String   stationName;
 String   stationJson;                // JSON-escaped station name (built when it changes)
 
@@ -147,7 +152,35 @@ float readSensorVolts(int pin, float divider) {
 }
 
 // ------------------------------------------------------ JSON helpers
-String num(float v, int digits) { return isfinite(v) ? String(v, digits) : String("null"); }
+// "null" or the value with `digits` decimals, into out (>= 16 bytes).
+const char* fmtNum(char* out, size_t n, float v, int digits) {
+  if (!isfinite(v)) snprintf(out, n, "null");
+  else snprintf(out, n, "%.*f", digits, (double)v);
+  return out;
+}
+
+// Appends printf-formatted text to a fixed buffer; never overflows.
+class JsonBuf {
+ public:
+  JsonBuf(char* b, size_t cap) : b_(b), cap_(cap), len_(0) { b_[0] = 0; }
+  bool add(const char* fmt, ...) __attribute__((format(printf, 2, 3))) {
+    if (len_ + 1 >= cap_) return false;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(b_ + len_, cap_ - len_, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= cap_ - len_) { b_[len_] = 0; return false; }
+    len_ += n;
+    return true;
+  }
+  size_t room() const { return cap_ - len_; }
+  const char* c_str() const { return b_; }
+
+ private:
+  char* b_;
+  size_t cap_;
+  size_t len_;
+};
 
 String jsonEscape(const String& s) {
   String out;
@@ -164,7 +197,7 @@ String jsonEscape(const String& s) {
   return out;
 }
 
-void sendJson(int code, const String& body) {
+void sendJson(int code, const char* body) {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Cache-Control", "no-store");
   server.send(code, "application/json", body);
@@ -189,8 +222,14 @@ void saveAnchors() {
 }
 
 void appendLog(float value, uint8_t kind) {
+  uint32_t t0 = micros();
   uint32_t s = logRing.append(bootId, uptimeS(), value, kind);
+  uint32_t flashUs = micros() - t0;
   if (s != 0) prefs.putUInt("seq", s);
+  uint32_t totalUs = micros() - t0;
+  // Once per minute (plus calibrations): measures the flash cost on hardware.
+  Serial.printf("log append seq=%u kind=%u flash=%u us total=%u us%s\n", (unsigned)s,
+                (unsigned)kind, (unsigned)flashUs, (unsigned)totalUs, s ? "" : " FAILED");
 }
 
 // ------------------------------------------------------ sampling
@@ -247,21 +286,21 @@ void pollButton(unsigned long now) {
 }
 
 // ------------------------------------------------------ HTTP handlers (no sensor reads)
+char readingsJson[512];   // station is <= 40 chars, escaped <= 240 bytes
+
 void handleReadings() {
-  unsigned long now = millis();
-  String json;
-  json.reserve(220 + stationJson.length());
-  json += "{\"turbidity\":";   json += num(rolling.median(), 2);
-  json += ",\"turbidity_v\":"; json += num(lastVolts, 3);
-  json += ",\"age_ms\":";      json += String(now - lastGoodSample);
-  json += ",\"uptime_s\":";    json += String(uptimeS());
-  json += ",\"limit\":";       json += String(LIMIT_NTU, 1);
-  json += ",\"boot\":";        json += String(bootId);
-  json += ",\"cal_v\":";       json += num(calV, 3);
-  json += ",\"cal_epoch\":";   json += calEpoch ? String(calEpoch) : String("null");
-  json += ",\"station\":\"";   json += stationJson;
-  json += "\"}";
-  sendJson(200, json);
+  char turb[16], tv[16], cv[16], ce[16];
+  fmtNum(turb, sizeof(turb), rolling.median(), 2);
+  fmtNum(tv, sizeof(tv), lastVolts, 3);
+  fmtNum(cv, sizeof(cv), calV, 3);
+  if (calEpoch) snprintf(ce, sizeof(ce), "%u", (unsigned)calEpoch);
+  else snprintf(ce, sizeof(ce), "null");
+  snprintf(readingsJson, sizeof(readingsJson),
+           "{\"turbidity\":%s,\"turbidity_v\":%s,\"age_ms\":%lu,\"uptime_s\":%u,"
+           "\"limit\":%.1f,\"boot\":%u,\"cal_v\":%s,\"cal_epoch\":%s,\"station\":\"%s\"}",
+           turb, tv, (unsigned long)(millis() - lastGoodSample), (unsigned)uptimeS(),
+           (double)LIMIT_NTU, (unsigned)bootId, cv, ce, stationJson.c_str());
+  sendJson(200, readingsJson);
 }
 
 bool parseU32(const String& s, uint32_t& out) {
@@ -293,42 +332,41 @@ void handleTime() {
   sendJson(200, accepted ? "{\"accepted\":true}" : "{\"accepted\":false}");
 }
 
-LogEntry logBuf[LOG_PAGE_MAX];   // static: keeps the 3.2 KB page off the stack
+LogEntry logBuf[LOG_PAGE_MAX];   // static: keeps the page off the stack
+char     logJson[4096];          // whole /log response, built with snprintf
 
 void handleLog() {
   uint32_t since = 0, maxN = LOG_PAGE_MAX;
   if (server.hasArg("since") && !parseU32(server.arg("since"), since)) since = 0;
   if (server.hasArg("max") && !parseU32(server.arg("max"), maxN)) maxN = LOG_PAGE_MAX;
   if (maxN > (uint32_t)LOG_PAGE_MAX) maxN = LOG_PAGE_MAX;
+  if (since < logBase) since = logBase;          // never rescan a lost region
 
   int n = logRing.since(since, logBuf, (int)maxN);
+  uint32_t oldest = logRing.oldestSeq();
+  if (oldest < logBase + 1) oldest = logBase + 1;
 
-  String json;
-  json.reserve(160 + n * 36);
-  json += "{\"boot\":";        json += String(bootId);
-  json += ",\"uptime_s\":";    json += String(uptimeS());
-  json += ",\"last_seq\":";    json += String(logRing.lastSeq());
-  json += ",\"oldest_seq\":";  json += String(logRing.oldestSeq());
-  json += ",\"anchors\":[";
+  JsonBuf j(logJson, sizeof(logJson));
+  j.add("{\"boot\":%u,\"uptime_s\":%u,\"last_seq\":%u,\"oldest_seq\":%u,\"anchors\":[",
+        (unsigned)bootId, (unsigned)uptimeS(), (unsigned)logRing.lastSeq(), (unsigned)oldest);
   Anchor a[TimeAnchors::MAX_ANCHORS];
   int na = anchors.all(a, TimeAnchors::MAX_ANCHORS);
   for (int i = 0; i < na; i++) {
-    if (i) json += ',';
-    json += '['; json += String(a[i].boot); json += ',';
-    json += String(a[i].epoch); json += ','; json += String(a[i].uptimeS); json += ']';
+    j.add("%s[%u,%u,%u]", i ? "," : "", (unsigned)a[i].boot, (unsigned)a[i].epoch,
+          (unsigned)a[i].uptimeS);
   }
-  json += "],\"entries\":[";
+  j.add("],\"entries\":[");
   for (int i = 0; i < n; i++) {
     const LogEntry& e = logBuf[i];
-    if (i) json += ',';
-    json += '['; json += String(e.seq); json += ',';
-    json += String(e.boot); json += ',';
-    json += String(e.uptimeS); json += ',';
-    json += num(e.value, e.kind == 1 ? 3 : 2); json += ',';
-    json += String(e.kind); json += ']';
+    char val[16], item[80];
+    fmtNum(val, sizeof(val), e.value, e.kind == 1 ? 3 : 2);
+    int len = snprintf(item, sizeof(item), "%s[%u,%u,%u,%s,%u]", i ? "," : "", (unsigned)e.seq,
+                       (unsigned)e.boot, (unsigned)e.uptimeS, val, (unsigned)e.kind);
+    if (len < 0 || (size_t)len + 3 > j.room()) break;   // keep room for "]}"; client pages on
+    j.add("%s", item);
   }
-  json += "]}";
-  sendJson(200, json);
+  j.add("]}");
+  sendJson(200, j.c_str());
 }
 
 const char* calStateName(CalState s) {
@@ -358,13 +396,12 @@ void handleCalStart() {
 }
 
 void handleCal() {
-  String json = "{\"state\":\"";
-  json += calStateName(cal.state());
-  json += "\",\"reason\":";       json += calReason(cal.lastCheck());
-  json += ",\"volts\":";          json += num(lastSecondVolts, 3);
-  json += ",\"seconds_stable\":"; json += String(cal.secondsStable());
-  json += ",\"cal_v\":";          json += num(calV, 3);
-  json += '}';
+  char json[160], v[16], cv[16];
+  snprintf(json, sizeof(json),
+           "{\"state\":\"%s\",\"reason\":%s,\"volts\":%s,\"seconds_stable\":%d,\"cal_v\":%s}",
+           calStateName(cal.state()), calReason(cal.lastCheck()),
+           fmtNum(v, sizeof(v), lastSecondVolts, 3), cal.secondsStable(),
+           fmtNum(cv, sizeof(cv), calV, 3));
   sendJson(200, json);
 }
 
@@ -417,6 +454,7 @@ void loadSettings() {
   }
 
   logRing.open(prefs.getUInt("seq", 0));
+  logBase = prefs.getUInt("log_base", 0);
 }
 
 void startWatchdog() {
@@ -441,8 +479,15 @@ void setup() {
   for (int i = 0; i < 60; i++) minuteBuf[i] = NAN;
 
   if (flashStore.begin()) {
-    Serial.printf("Log: /log.bin ready%s, last seq %u\n",
-                  flashStore.created() ? " (new file)" : "", (unsigned)logRing.lastSeq());
+    if (flashStore.created() && logRing.lastSeq() > 0) {
+      // Segments were recreated but the seq counter survived: entries up to
+      // lastSeq are gone. Move the base so /log never rescans that gap.
+      logBase = logRing.lastSeq();
+      prefs.putUInt("log_base", logBase);
+    }
+    Serial.printf("Log: /log segments ready%s, last seq %u, base %u\n",
+                  flashStore.created() ? " (created)" : "", (unsigned)logRing.lastSeq(),
+                  (unsigned)logBase);
   } else {
     Serial.println("[WARN] LittleFS log unavailable; live readings continue without a log.");
   }
@@ -509,6 +554,8 @@ void loop() {
 
   if (now - lastSerialMs >= 3000) {          // calibration log every 3 s
     lastSerialMs = now;
-    Serial.printf("turb V=%.3f  NTU=%s  cal=%.3f\n", lastVolts, num(rolling.median(), 2).c_str(), calV);
+    char ntu[16];
+    Serial.printf("turb V=%.3f  NTU=%s  cal=%.3f\n", lastVolts,
+                  fmtNum(ntu, sizeof(ntu), rolling.median(), 2), calV);
   }
 }

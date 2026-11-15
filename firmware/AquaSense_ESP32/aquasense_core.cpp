@@ -127,10 +127,15 @@ int LogRing::since(uint32_t seq, LogEntry* out, int max) const {
   if (seq >= last_) return 0;
   if (first < oldest) first = oldest;
   int n = 0;
+  int stale = 0;  // consecutive mismatching slots
   for (uint32_t q = first; q <= last_ && n < max; q++) {
     LogEntry e;
     if (!s_.read((q - 1) % cap_, e)) break;
-    if (e.seq != q) continue;  // erased or stale slot: never return it
+    if (e.seq != q) {  // erased or stale slot: never return it
+      if (++stale >= MAX_STALE_RUN) break;
+      continue;
+    }
+    stale = 0;
     out[n++] = e;
   }
   return n;

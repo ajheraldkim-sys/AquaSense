@@ -23,6 +23,7 @@ Three tabs, designed to be read at a glance:
   `{"turbidity":1.80,"turbidity_v":4.112,"age_ms":420,"uptime_s":3600}`
 - Values are trimmed means of 30 ADC samples, refreshed every second.
 - **Calibrate once** (see the comment at the top of the sketch): set `TURB_CLEAR_VOLTS` to the voltage printed with the sensor in clean water.
+- Don't hold the BOOT button while powering up (enters download mode).
 
 ## Building a release
 Signing passwords are read from `local.properties` (not from the build file):

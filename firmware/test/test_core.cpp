@@ -183,6 +183,63 @@ static void test_logRingStaleRecords() {
   }
 }
 
+// Counts reads so the stale-run cap can be observed.
+class CountingStore : public RecordStore {
+ public:
+  explicit CountingStore(uint32_t slots) : m_(slots) {}
+  int reads = 0;
+  bool read(uint32_t slot, LogEntry& e) override { reads++; return m_.read(slot, e); }
+  bool write(uint32_t slot, const LogEntry& e) override { return m_.write(slot, e); }
+  MemoryStore m_;
+};
+
+static void test_logRingStaleRunCap() {
+  CHECK(LogRing::MAX_STALE_RUN == 256);
+  {
+    // 600 erased slots: the scan gives up after 256 consecutive mismatches.
+    CountingStore s(1000);
+    LogRing r(s, 1000);
+    r.open(600);
+    LogEntry o[100];
+    CHECK(r.since(0, o, 100) == 0);
+    CHECK(s.reads == 256);
+  }
+  {
+    // 255 stale slots then a valid record: still found.
+    MemoryStore s(1000);
+    LogRing r(s, 1000);
+    r.open(255);
+    CHECK(r.append(1, 60, 2.0f, 0) == 256);
+    LogEntry o[100];
+    int n = r.since(0, o, 100);
+    CHECK(n == 1);
+    CHECK(n == 1 && o[0].seq == 256);
+  }
+  {
+    // 256 stale slots then a valid record: cap reached first, nothing returned.
+    MemoryStore s(1000);
+    LogRing r(s, 1000);
+    r.open(256);
+    CHECK(r.append(1, 60, 2.0f, 0) == 257);
+    LogEntry o[100];
+    CHECK(r.since(0, o, 100) == 0);
+    CHECK(r.since(256, o, 100) == 1);  // a cursor past the gap still works
+  }
+  {
+    // Mismatch counter resets after a valid record.
+    MemoryStore s(1000);
+    LogRing r(s, 1000);
+    r.open(200);
+    r.append(1, 60, 1.0f, 0);           // seq 201
+    r.open(401);                        // 200 more stale slots (202..401)
+    r.append(1, 120, 2.0f, 0);          // seq 402
+    LogEntry o[100];
+    int n = r.since(0, o, 100);
+    CHECK(n == 2);
+    CHECK(n == 2 && o[0].seq == 201 && o[1].seq == 402);
+  }
+}
+
 static void test_calCandidateInitiallyNan() {
   CalSession c;
   CHECK(std::isnan(c.candidate()));
@@ -334,6 +391,7 @@ int main() {
   test_logRing();
   test_logRingWriteFailure();
   test_logRingStaleRecords();
+  test_logRingStaleRunCap();
   test_calCandidateInitiallyNan();
   test_checkOrder();
   test_readyAfter60StableSeconds();

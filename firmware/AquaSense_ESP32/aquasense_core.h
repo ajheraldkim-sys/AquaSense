@@ -87,13 +87,17 @@ class MemoryStore : public RecordStore {
 // persists lastSeq() and passes it to open() after reboot.
 class LogRing {
  public:
+  // since() gives up after this many consecutive stale slots, so a wiped
+  // region is never scanned in full on every poll.
+  static const int MAX_STALE_RUN = 256;
   LogRing(RecordStore& s, uint32_t capacity);
   void open(uint32_t lastSeq);
   // Returns the new seq, or 0 if the store write failed (lastSeq unchanged).
   uint32_t append(uint16_t boot, uint32_t uptimeS, float value, uint8_t kind);
   // Entries with seq > `seq`, oldest first, at most max. If `seq` has been
   // evicted, starts at oldestSeq(). Slots whose stored seq does not match the
-  // expected seq (erased/stale flash) are skipped, never returned.
+  // expected seq (erased/stale flash) are skipped, never returned; after
+  // MAX_STALE_RUN consecutive stale slots it returns what it has so far.
   int since(uint32_t seq, LogEntry* out, int max) const;
   uint32_t lastSeq() const;
   uint32_t oldestSeq() const;  // empty ring: lastSeq()+1 (== 1 when fresh)
