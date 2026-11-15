@@ -1,6 +1,7 @@
 // AquaSense firmware core: pure C++, no Arduino.h (host-testable).
 #pragma once
 #include <stdint.h>
+#include <limits>
 #include <vector>
 
 // ---- Turbidity curve -------------------------------------------------------
@@ -88,9 +89,11 @@ class LogRing {
  public:
   LogRing(RecordStore& s, uint32_t capacity);
   void open(uint32_t lastSeq);
+  // Returns the new seq, or 0 if the store write failed (lastSeq unchanged).
   uint32_t append(uint16_t boot, uint32_t uptimeS, float value, uint8_t kind);
   // Entries with seq > `seq`, oldest first, at most max. If `seq` has been
-  // evicted, starts at oldestSeq().
+  // evicted, starts at oldestSeq(). Slots whose stored seq does not match the
+  // expected seq (erased/stale flash) are skipped, never returned.
   int since(uint32_t seq, LogEntry* out, int max) const;
   uint32_t lastSeq() const;
   uint32_t oldestSeq() const;  // empty ring: lastSeq()+1 (== 1 when fresh)
@@ -126,7 +129,7 @@ class CalSession {
  private:
   CalState state_ = CAL_IDLE;
   CalCheck last_ = CAL_OK;
-  float candidate_;
+  float candidate_ = std::numeric_limits<float>::quiet_NaN();
   float w_[WINDOW];
   int n_ = 0;  // oldest first; shifted when full
   uint32_t startMs_ = 0;

@@ -1,18 +1,36 @@
 /*
-  AquaSense ESP32 Firmware (turbidity only)
-  -----------------------------------------
-  Serves turbidity readings to the AquaSense Android app over a Wi-Fi Access Point.
+  AquaSense ESP32 Firmware v3 (turbidity, live view + around-the-clock log)
+  -------------------------------------------------------------------------
+  Serves turbidity readings to the AquaSense Android app over its own Wi-Fi
+  Access Point (SSID "AquaSense-ESP32", http://192.168.4.1, up to 10 phones).
 
-  App Endpoint : HTTP GET http://192.168.4.1/readings
-  Response JSON: {"turbidity":1.80,"turbidity_v":4.112,"age_ms":420,"uptime_s":3600}
-                 "turbidity" is null if the sensor is unplugged.
+  ENDPOINTS (all JSON, "Cache-Control: no-store")
+    GET  /readings          {"turbidity":1.80,"turbidity_v":4.112,"age_ms":120,"uptime_s":3600,
+                             "limit":5.0,"boot":7,"cal_v":4.180,"cal_epoch":1790000000,
+                             "station":"AquaSense Station"}
+                            turbidity = rolling median of the last 10 samples (~2 s);
+                            null when the sensor is unplugged. cal_epoch null if unknown.
+    POST /time?epoch=N      {"accepted":true}  First plausible phone time per boot wins
+                            (GET is tolerated for manual testing).
+    GET  /log?since=S&max=M {"boot":7,"uptime_s":3600,"last_seq":42,"oldest_seq":1,
+                             "anchors":[[boot,epoch,uptime_s],...],
+                             "entries":[[seq,boot,uptime_s,value,kind],...]}
+                            Minute log, oldest first, M default/max 200.
+                            kind 0 = minute median NTU, kind 1 = calibration (clear volts).
+    POST /cal/start         {"state":"settling"}
+    GET  /cal               {"state":"idle|settling|ready|done|rejected|expired",
+                             "reason":"unstable|out_of_range|too_low"|null,
+                             "volts":4.181,"seconds_stable":42,"cal_v":4.200}
+    POST /station?name=...  {"ok":true}  (trimmed, max 40 characters)
 
-  ACCURACY
-  - Each value is a trimmed mean of 30 ADC readings (outliers dropped), refreshed every second.
-  - "age_ms" tells the app how old the value is, so a hung sensor is detected.
-  - A disconnected sensor is reported as null, never as a made-up number.
+  SAMPLING / LOG
+  - Every 200 ms: trimmed mean of 30 ADC reads (~15 ms) -> NTU -> rolling median of 10.
+    Below 0.3 V the sensor counts as unplugged and "turbidity" becomes null.
+  - Every minute, the median of that minute's 60 per-second values is appended to a
+    7-day ring (10,080 entries) in LittleFS file /log.bin. If LittleFS fails the
+    live view keeps working and /log returns no entries.
 
-  Board: ESP32 Dev Module (Arduino IDE -> Tools -> Board -> "esp32"). No extra libraries.
+  Board: ESP32 Dev Module (esp32 core 3.x). No extra libraries.
 
   WIRING – Turbidity sensor (DFRobot SEN0189 / analog sensor)
   ------
@@ -22,19 +40,34 @@
                              |
                            GPIO34 (ratio = 30k/20k = 1.5)
      Set the sensor board switch to "A" (analog), not "D".
+     Calibration confirm button: the board's own BOOT button (GPIO0), nothing to wire.
 
-  CALIBRATION (do this once — it is the biggest accuracy win)
+  CALIBRATION (in the app: Settings -> Sensor care)
   -----------
-  Open Serial Monitor at 115200 baud; the sensor voltage is printed every 3 s.
-  Put the sensor in clean bottled/distilled water, wait 1 minute, and copy the printed
-  "turb V" into TURB_CLEAR_VOLTS below. This corrects for your USB/5V supply: uncalibrated,
-  the SEN0189 curve shifts ~700 NTU for a 0.2 V supply drop.
+  1. Put the sensor in clean bottled water; the app calls POST /cal/start.
+  2. The ESP32 waits until the voltage has been steady for 60 s and is plausible
+     (3.5-4.8 V, and not more than 0.15 V below the current calibration).
+  3. Within 60 s of "ready", press the BOOT button on the ESP32 in the sensor box.
+     The new clean-water voltage is saved (survives power loss) and logged.
+  TURB_CLEAR_VOLTS below is only the fallback when nothing valid is saved.
+  The sensor voltage is still printed on Serial (115200 baud) every 3 s for field debugging.
   Note: the SEN0189 is a low-cost sensor. Below ~10 NTU its resolution is coarse, so treat
   readings near the 5 NTU limit as "check again" and confirm with a lab turbidimeter.
+
+  WATCHDOG
+  The loop task is watched by the ESP32 task watchdog (10 s). If loop() ever stops
+  (the field freeze seen on older firmware), the board panics and reboots by itself.
+  Nothing in loop() may block for seconds.
 */
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Preferences.h>
+#include <esp_task_wdt.h>
+#include <esp_timer.h>
+#include <esp_system.h>
+#include "aquasense_core.h"
+#include "flash_store.h"
 
 // ---------------- WI-FI ACCESS POINT CONFIG -----------------
 const char* AP_SSID = "AquaSense-ESP32";
@@ -43,11 +76,53 @@ const char* AP_PASS = "aquasense123";   // At least 8 characters. Change it for 
 // ---------------- SENSOR -------------------------------------
 const int   TURB_PIN     = 34;
 const float TURB_DIVIDER = 1.5;    // voltage divider ratio between sensor output and ESP32 pin
+const int   BUTTON_PIN   = 0;      // BOOT button, active LOW
 
-// Sensor output voltage in clean water (see CALIBRATION above). 4.20 = DFRobot nominal.
+// Fallback clean-water sensor voltage (DFRobot nominal) when no valid calibration is saved.
 const float TURB_CLEAR_VOLTS = 4.20;
+const float LIMIT_NTU        = 5.0;
+const char* DEFAULT_STATION  = "AquaSense Station";
 
-WebServer server(80);
+const unsigned long SAMPLE_MS   = 200;
+const unsigned long DEBOUNCE_MS = 50;
+const uint32_t      WDT_TIMEOUT_MS = 10000;
+const int           LOG_PAGE_MAX = 200;
+
+WebServer   server(80);
+Preferences prefs;
+FlashStore  flashStore;
+LogRing     logRing(flashStore, FlashStore::SLOTS);
+TimeAnchors anchors;
+CalSession  cal;
+RollingMedian rolling(10);
+
+// ------------------------------------------------------ state (handlers only read)
+uint16_t bootId = 0;
+float    calV = TURB_CLEAR_VOLTS;
+uint32_t calEpoch = 0;               // 0 = unknown
+uint32_t calUptimePending = 0;       // uptime of a calibration this boot awaiting an epoch
+bool     calEpochPending = false;
+String   stationName;
+String   stationJson;                // JSON-escaped station name (built when it changes)
+
+float    lastVolts = NAN;            // last sample, sensor-side volts
+float    lastSecondVolts = NAN;      // mean volts of the last completed second
+unsigned long lastGoodSample = 0;
+
+float    minuteBuf[60];
+int      minuteIdx = 0;
+float    voltSum = 0;
+int      voltCount = 0;
+
+unsigned long lastSampleMs = 0;
+unsigned long lastSecondMs = 0;
+unsigned long lastSerialMs = 0;
+
+int      btnRaw = HIGH, btnStable = HIGH;
+unsigned long btnChangedMs = 0;
+CalState prevCalState = CAL_IDLE;
+
+uint32_t uptimeS() { return (uint32_t)(esp_timer_get_time() / 1000000ULL); }  // no 49-day wrap
 
 /*
   Read N ADC samples, drop the lowest and highest 20 %, average the rest.
@@ -71,59 +146,312 @@ float readSensorVolts(int pin, float divider) {
   return (sum / (float)(N - 2 * cut)) / 1000.0 * divider;
 }
 
-// DFRobot SEN0189 NTU curve (valid 2.5 V .. 4.2 V at a 5.0 V supply)
-float voltsToNTU(float v) {
-  if (v >= 4.2) return 0.0;
-  if (v <= 2.5) return 3000.0;
-  float ntu = -1120.4 * v * v + 5742.3 * v - 4352.9;
-  return ntu < 0 ? 0.0 : ntu;
-}
+// ------------------------------------------------------ JSON helpers
+String num(float v, int digits) { return isfinite(v) ? String(v, digits) : String("null"); }
 
-// ------------------------------------------------------ cached measurement
-// The HTTP handler only reads these, so responses are instant.
-float cachedTurb    = NAN;
-float lastTurbVolts = NAN;
-unsigned long lastSampleTime = 0;
-unsigned long lastGoodSample = 0;
-const unsigned long SAMPLE_INTERVAL = 1000;   // refresh every second
-
-void updateSensor() {
-  float v = readSensorVolts(TURB_PIN, TURB_DIVIDER);
-  lastTurbVolts = v;
-  if (v < 0.3) {          // floating / unplugged input reads near 0 V
-    cachedTurb = NAN;
-    return;
+String jsonEscape(const String& s) {
+  String out;
+  out.reserve(s.length() + 8);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '"' || c == '\\') { out += '\\'; out += c; }
+    else if ((uint8_t)c < 0x20) {
+      char buf[8];
+      snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)(uint8_t)c);
+      out += buf;
+    } else out += c;
   }
-  float vn = v * (4.2 / TURB_CLEAR_VOLTS);   // clean water -> exactly 4.2 V
-  cachedTurb = voltsToNTU(vn);
-  lastGoodSample = millis();
+  return out;
 }
 
-String num(float v, int digits) { return isnan(v) ? String("null") : String(v, digits); }
-
-void handleReadings() {
-  String json = "{\"turbidity\":" + num(cachedTurb, 2) +
-                ",\"turbidity_v\":" + num(lastTurbVolts, 3) +
-                ",\"age_ms\":" + String(millis() - lastGoodSample) +
-                ",\"uptime_s\":" + String(millis() / 1000) + "}";
+void sendJson(int code, const String& body) {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Cache-Control", "no-store");
-  server.send(200, "application/json", json);
+  server.send(code, "application/json", body);
 }
 
-unsigned long lastLog = 0;
+void setStation(const String& name) {
+  stationName = name;
+  stationJson = jsonEscape(name);
+}
+
+// Epoch for an uptime in this boot, 0 when this boot has no time anchor yet.
+uint32_t epochNow(uint32_t up) {
+  if (!anchors.has(bootId)) return 0;
+  Anchor a = anchors.get(bootId);
+  return a.epoch + (up - a.uptimeS);
+}
+
+void saveAnchors() {
+  Anchor buf[TimeAnchors::MAX_ANCHORS];
+  int n = anchors.all(buf, TimeAnchors::MAX_ANCHORS);
+  prefs.putBytes("anchors", buf, n * sizeof(Anchor));
+}
+
+void appendLog(float value, uint8_t kind) {
+  uint32_t s = logRing.append(bootId, uptimeS(), value, kind);
+  if (s != 0) prefs.putUInt("seq", s);
+}
+
+// ------------------------------------------------------ sampling
+void takeSample() {
+  float v = readSensorVolts(TURB_PIN, TURB_DIVIDER);
+  lastVolts = v;
+  if (v < 0.3) {              // floating / unplugged input reads near 0 V
+    rolling.push(NAN);        // ignored by the window ...
+    rolling.clear();          // ... so drop old values: serve null, never a stale number
+    return;
+  }
+  rolling.push(voltsToNtu(v, calV));
+  lastGoodSample = millis();
+  voltSum += v;
+  voltCount++;
+}
+
+void onSecond() {
+  lastSecondVolts = voltCount > 0 ? voltSum / voltCount : NAN;
+  voltSum = 0;
+  voltCount = 0;
+  cal.secondTick(lastSecondVolts, millis(), calV);
+
+  minuteBuf[minuteIdx++] = rolling.median();   // NaN when unplugged
+  if (minuteIdx == 60) {
+    minuteIdx = 0;
+    float m = medianOf(minuteBuf, 60);
+    if (!isnan(m)) appendLog(m, 0);
+  }
+}
+
+void onCalibrationDone() {
+  float c = cal.candidate();
+  if (!isfinite(c)) return;
+  calV = c;
+  uint32_t up = uptimeS();
+  calEpoch = epochNow(up);
+  calEpochPending = (calEpoch == 0);
+  calUptimePending = up;
+  prefs.putFloat("cal_v", calV);
+  prefs.putUInt("cal_epoch", calEpoch);
+  rolling.clear();            // old samples used the previous calibration
+  appendLog(calV, 1);
+  Serial.printf("[CAL] saved clear-water voltage %.3f V\n", calV);
+}
+
+void pollButton(unsigned long now) {
+  int raw = digitalRead(BUTTON_PIN);
+  if (raw != btnRaw) { btnRaw = raw; btnChangedMs = now; }
+  if (raw != btnStable && now - btnChangedMs >= DEBOUNCE_MS) {
+    btnStable = raw;
+    if (btnStable == LOW) cal.buttonPressed(millis());
+  }
+}
+
+// ------------------------------------------------------ HTTP handlers (no sensor reads)
+void handleReadings() {
+  unsigned long now = millis();
+  String json;
+  json.reserve(220 + stationJson.length());
+  json += "{\"turbidity\":";   json += num(rolling.median(), 2);
+  json += ",\"turbidity_v\":"; json += num(lastVolts, 3);
+  json += ",\"age_ms\":";      json += String(now - lastGoodSample);
+  json += ",\"uptime_s\":";    json += String(uptimeS());
+  json += ",\"limit\":";       json += String(LIMIT_NTU, 1);
+  json += ",\"boot\":";        json += String(bootId);
+  json += ",\"cal_v\":";       json += num(calV, 3);
+  json += ",\"cal_epoch\":";   json += calEpoch ? String(calEpoch) : String("null");
+  json += ",\"station\":\"";   json += stationJson;
+  json += "\"}";
+  sendJson(200, json);
+}
+
+bool parseU32(const String& s, uint32_t& out) {
+  if (s.length() == 0 || s.length() > 10) return false;
+  uint64_t v = 0;
+  for (size_t i = 0; i < s.length(); i++) {
+    if (s[i] < '0' || s[i] > '9') return false;
+    v = v * 10 + (s[i] - '0');
+  }
+  if (v > 0xFFFFFFFFULL) return false;
+  out = (uint32_t)v;
+  return true;
+}
+
+void handleTime() {
+  uint32_t epoch = 0;
+  bool accepted = false;
+  if (parseU32(server.arg("epoch"), epoch)) {
+    accepted = anchors.offer(bootId, epoch, uptimeS());
+    if (accepted) {
+      saveAnchors();
+      if (calEpochPending) {   // calibration happened earlier this boot: date it now
+        calEpoch = epochNow(calUptimePending);
+        calEpochPending = false;
+        prefs.putUInt("cal_epoch", calEpoch);
+      }
+    }
+  }
+  sendJson(200, accepted ? "{\"accepted\":true}" : "{\"accepted\":false}");
+}
+
+LogEntry logBuf[LOG_PAGE_MAX];   // static: keeps the 3.2 KB page off the stack
+
+void handleLog() {
+  uint32_t since = 0, maxN = LOG_PAGE_MAX;
+  if (server.hasArg("since") && !parseU32(server.arg("since"), since)) since = 0;
+  if (server.hasArg("max") && !parseU32(server.arg("max"), maxN)) maxN = LOG_PAGE_MAX;
+  if (maxN > (uint32_t)LOG_PAGE_MAX) maxN = LOG_PAGE_MAX;
+
+  int n = logRing.since(since, logBuf, (int)maxN);
+
+  String json;
+  json.reserve(160 + n * 36);
+  json += "{\"boot\":";        json += String(bootId);
+  json += ",\"uptime_s\":";    json += String(uptimeS());
+  json += ",\"last_seq\":";    json += String(logRing.lastSeq());
+  json += ",\"oldest_seq\":";  json += String(logRing.oldestSeq());
+  json += ",\"anchors\":[";
+  Anchor a[TimeAnchors::MAX_ANCHORS];
+  int na = anchors.all(a, TimeAnchors::MAX_ANCHORS);
+  for (int i = 0; i < na; i++) {
+    if (i) json += ',';
+    json += '['; json += String(a[i].boot); json += ',';
+    json += String(a[i].epoch); json += ','; json += String(a[i].uptimeS); json += ']';
+  }
+  json += "],\"entries\":[";
+  for (int i = 0; i < n; i++) {
+    const LogEntry& e = logBuf[i];
+    if (i) json += ',';
+    json += '['; json += String(e.seq); json += ',';
+    json += String(e.boot); json += ',';
+    json += String(e.uptimeS); json += ',';
+    json += num(e.value, e.kind == 1 ? 3 : 2); json += ',';
+    json += String(e.kind); json += ']';
+  }
+  json += "]}";
+  sendJson(200, json);
+}
+
+const char* calStateName(CalState s) {
+  switch (s) {
+    case CAL_SETTLING: return "settling";
+    case CAL_READY:    return "ready";
+    case CAL_DONE:     return "done";
+    case CAL_REJECTED: return "rejected";
+    case CAL_EXPIRED:  return "expired";
+    default:           return "idle";
+  }
+}
+
+const char* calReason(CalCheck c) {
+  switch (c) {
+    case CAL_UNSTABLE:     return "\"unstable\"";
+    case CAL_OUT_OF_RANGE: return "\"out_of_range\"";
+    case CAL_TOO_LOW:      return "\"too_low\"";
+    default:               return "null";
+  }
+}
+
+void handleCalStart() {
+  cal.start(millis());
+  prevCalState = cal.state();
+  sendJson(200, "{\"state\":\"settling\"}");
+}
+
+void handleCal() {
+  String json = "{\"state\":\"";
+  json += calStateName(cal.state());
+  json += "\",\"reason\":";       json += calReason(cal.lastCheck());
+  json += ",\"volts\":";          json += num(lastSecondVolts, 3);
+  json += ",\"seconds_stable\":"; json += String(cal.secondsStable());
+  json += ",\"cal_v\":";          json += num(calV, 3);
+  json += '}';
+  sendJson(200, json);
+}
+
+// Trim, then keep at most 40 characters (UTF-8 aware: never cut inside a character).
+String cleanStationName(String s) {
+  s.trim();
+  int chars = 0;
+  size_t i = 0;
+  for (; i < s.length(); i++) {
+    if (((uint8_t)s[i] & 0xC0) != 0x80) {   // start of a character
+      if (chars == 40) break;
+      chars++;
+    }
+  }
+  s = s.substring(0, i);
+  s.trim();
+  return s;
+}
+
+void handleStation() {
+  String name = cleanStationName(server.arg("name"));
+  if (name.length() == 0) { sendJson(400, "{\"ok\":false}"); return; }
+  if (name != stationName) {
+    prefs.putString("station", name);
+    setStation(name);
+  }
+  sendJson(200, "{\"ok\":true}");
+}
+
+// ------------------------------------------------------ setup / loop
+void loadSettings() {
+  prefs.begin("aqs", false);
+
+  bootId = prefs.getUShort("boot", 0) + 1;
+  if (bootId == 0) bootId = 1;               // 0 never used as a boot id
+  prefs.putUShort("boot", bootId);
+
+  float v = prefs.getFloat("cal_v", NAN);
+  calV = (isfinite(v) && v >= 3.5f && v <= 4.8f) ? v : TURB_CLEAR_VOLTS;
+  calEpoch = prefs.getUInt("cal_epoch", 0);
+
+  setStation(prefs.getString("station", DEFAULT_STATION));
+  if (stationName.length() == 0) setStation(DEFAULT_STATION);
+
+  Anchor buf[TimeAnchors::MAX_ANCHORS];
+  size_t len = prefs.getBytesLength("anchors");
+  if (len > 0 && len <= sizeof(buf) && len % sizeof(Anchor) == 0) {
+    prefs.getBytes("anchors", buf, len);
+    anchors.load(buf, len / sizeof(Anchor));
+  }
+
+  logRing.open(prefs.getUInt("seq", 0));
+}
+
+void startWatchdog() {
+  esp_task_wdt_config_t cfg = {};
+  cfg.timeout_ms = WDT_TIMEOUT_MS;
+  cfg.idle_core_mask = 1 << 0;   // keep the core default: watch the core-0 idle task
+  cfg.trigger_panic = true;      // panic -> automatic reboot
+  if (esp_task_wdt_reconfigure(&cfg) != ESP_OK) esp_task_wdt_init(&cfg);
+  esp_task_wdt_add(NULL);        // this (Arduino loop) task
+}
 
 void setup() {
   Serial.begin(115200);
   delay(1000); // Allow USB serial and power to stabilize
+  Serial.printf("\nAquaSense v3 starting (reset reason %d)\n", (int)esp_reset_reason());
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db); // ~0-3.1 V input range
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  loadSettings();
+  for (int i = 0; i < 60; i++) minuteBuf[i] = NAN;
+
+  if (flashStore.begin()) {
+    Serial.printf("Log: /log.bin ready%s, last seq %u\n",
+                  flashStore.created() ? " (new file)" : "", (unsigned)logRing.lastSeq());
+  } else {
+    Serial.println("[WARN] LittleFS log unavailable; live readings continue without a log.");
+  }
 
   WiFi.disconnect(true);
   delay(100);
   WiFi.mode(WIFI_AP);
-  bool apSuccess = WiFi.softAP(AP_SSID, AP_PASS, 1);   // channel 1: best phone compatibility
+  // channel 1 (best phone compatibility), visible SSID, max 10 stations
+  bool apSuccess = WiFi.softAP(AP_SSID, AP_PASS, 1, 0, 10);
 
   if (apSuccess) {
     Serial.println("\n========================================");
@@ -131,29 +459,56 @@ void setup() {
     Serial.println("========================================");
     Serial.print("Wi-Fi SSID : "); Serial.println(AP_SSID);
     Serial.print("Server URL : http://"); Serial.print(WiFi.softAPIP()); Serial.println("/readings");
+    Serial.printf("Boot #%u, station \"%s\", cal %.3f V\n", bootId, stationName.c_str(), calV);
     Serial.println("========================================\n");
   } else {
     Serial.println("\n[ERROR] Failed to start SoftAP! Check power supply.");
   }
 
-  server.on("/readings", handleReadings);
+  server.on("/readings", HTTP_GET, handleReadings);
+  server.on("/time", HTTP_POST, handleTime);
+  server.on("/time", HTTP_GET, handleTime);    // tolerated for manual testing
+  server.on("/log", HTTP_GET, handleLog);
+  server.on("/cal/start", HTTP_POST, handleCalStart);
+  server.on("/cal", HTTP_GET, handleCal);
+  server.on("/station", HTTP_POST, handleStation);
   server.on("/", []() {
     server.send(200, "text/plain", "AquaSense ESP32 OK. Readings endpoint: /readings");
   });
+  server.onNotFound([]() { sendJson(404, "{\"error\":\"not found\"}"); });
   server.begin();
-  updateSensor();
+
+  takeSample();
+  unsigned long now = millis();
+  lastSampleMs = now;
+  lastSecondMs = now;
+  lastSerialMs = now;
+
+  startWatchdog();
 }
 
 void loop() {
+  esp_task_wdt_reset();
   server.handleClient();
 
   unsigned long now = millis();
-  if (now - lastSampleTime >= SAMPLE_INTERVAL) {
-    lastSampleTime = now;
-    updateSensor();
+  pollButton(now);
+
+  if (now - lastSampleMs >= SAMPLE_MS) {
+    lastSampleMs = (now - lastSampleMs > 5 * SAMPLE_MS) ? now : lastSampleMs + SAMPLE_MS;
+    takeSample();
   }
-  if (now - lastLog >= 3000) {          // calibration log every 3 s
-    lastLog = now;
-    Serial.printf("turb V=%.3f  NTU=%s\n", lastTurbVolts, num(cachedTurb, 2).c_str());
+  if (now - lastSecondMs >= 1000) {
+    lastSecondMs = (now - lastSecondMs > 5000) ? now : lastSecondMs + 1000;
+    onSecond();
+  }
+
+  CalState st = cal.state();
+  if (st == CAL_DONE && prevCalState != CAL_DONE) onCalibrationDone();
+  prevCalState = st;
+
+  if (now - lastSerialMs >= 3000) {          // calibration log every 3 s
+    lastSerialMs = now;
+    Serial.printf("turb V=%.3f  NTU=%s  cal=%.3f\n", lastVolts, num(rolling.median(), 2).c_str(), calV);
   }
 }

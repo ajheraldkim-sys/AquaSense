@@ -128,6 +128,66 @@ static void test_logRing() {
   CHECK(sizeof(LogEntry) == 16);
 }
 
+// Store whose writes can be made to fail (flash error simulation).
+class FlakyStore : public RecordStore {
+ public:
+  explicit FlakyStore(uint32_t slots) : m_(slots) {}
+  bool failWrites = false;
+  bool read(uint32_t slot, LogEntry& e) override { return m_.read(slot, e); }
+  bool write(uint32_t slot, const LogEntry& e) override {
+    return failWrites ? false : m_.write(slot, e);
+  }
+  MemoryStore m_;
+};
+
+static void test_logRingWriteFailure() {
+  FlakyStore s(8);
+  LogRing r(s, 8);
+  CHECK(r.append(1, 60, 1.0f, 0) == 1);
+  s.failWrites = true;
+  CHECK(r.append(1, 120, 2.0f, 0) == 0);  // failed write: no seq consumed
+  CHECK(r.lastSeq() == 1);
+  s.failWrites = false;
+  CHECK(r.append(1, 180, 3.0f, 0) == 2);
+  LogEntry o[8];
+  CHECK(r.since(0, o, 8) == 2);
+  CHECK(o[1].seq == 2 && o[1].value == 3.0f);
+}
+
+static void test_logRingStaleRecords() {
+  {
+    // Flash erased/recreated while the persisted seq survived: nothing valid.
+    MemoryStore s(8);
+    LogRing r(s, 8);
+    r.open(5);
+    LogEntry o[8];
+    CHECK(r.since(0, o, 8) == 0);
+    // New appends after the wipe are still returned.
+    CHECK(r.append(2, 60, 7.0f, 0) == 6);
+    int n = r.since(0, o, 8);
+    CHECK(n == 1);
+    CHECK(n >= 1 && o[0].seq == 6);
+  }
+  {
+    // One stale slot in the middle is skipped, later records still returned.
+    MemoryStore s(8);
+    LogRing r(s, 8);
+    fill(r, 4);
+    LogEntry bad{99, 0, 0.0f, 1, 0, 0};
+    s.write(1, bad);  // slot of seq 2
+    LogEntry o[8];
+    int n = r.since(0, o, 8);
+    CHECK(n == 3);
+    CHECK(n == 3 && o[0].seq == 1 && o[1].seq == 3 && o[2].seq == 4);
+    for (int i = 0; i < n; i++) CHECK(o[i].seq != 99);
+  }
+}
+
+static void test_calCandidateInitiallyNan() {
+  CalSession c;
+  CHECK(std::isnan(c.candidate()));
+}
+
 // ---- Calibration -----------------------------------------------------------
 static void test_checkOrder() {
   CHECK(checkCalibration(3.0f, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
@@ -272,6 +332,9 @@ int main() {
   test_medianOf();
   test_timeAnchors();
   test_logRing();
+  test_logRingWriteFailure();
+  test_logRingStaleRecords();
+  test_calCandidateInitiallyNan();
   test_checkOrder();
   test_readyAfter60StableSeconds();
   test_noisyStaysSettling();

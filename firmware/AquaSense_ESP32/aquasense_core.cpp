@@ -109,7 +109,7 @@ uint32_t LogRing::append(uint16_t boot, uint32_t uptimeS, float value, uint8_t k
   e.boot = boot;
   e.kind = kind;
   e.pad = 0;
-  s_.write((e.seq - 1) % cap_, e);
+  if (!s_.write((e.seq - 1) % cap_, e)) return 0;  // seq not consumed
   last_ = e.seq;
   return e.seq;
 }
@@ -130,6 +130,7 @@ int LogRing::since(uint32_t seq, LogEntry* out, int max) const {
   for (uint32_t q = first; q <= last_ && n < max; q++) {
     LogEntry e;
     if (!s_.read((q - 1) % cap_, e)) break;
+    if (e.seq != q) continue;  // erased or stale slot: never return it
     out[n++] = e;
   }
   return n;
