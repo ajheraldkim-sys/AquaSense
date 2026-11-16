@@ -7,7 +7,7 @@ float voltsToNtu(float sensorVolts, float clearVolts) {
   if (!std::isfinite(sensorVolts) || !std::isfinite(clearVolts) || clearVolts <= 0.3f) return 0.0f;
   float r = sensorVolts / clearVolts;
   if (r >= 0.998f) return 0.0f;
-  if (r <= (2.5f / 4.2f)) return 3000.0f;
+  if (r <= 0.25f) return 3000.0f;
   float drop = 1.0f - r;  // fractional light loss relative to calibrated clean water
   if (drop <= 0.015f) {
     // 0.2% .. 1.5% drop -> 0 .. 1 NTU (Excellent)
@@ -25,8 +25,8 @@ float voltsToNtu(float sensorVolts, float clearVolts) {
     // 18.0% .. 35.0% drop -> 20 .. 50 NTU (Poor)
     return 20.0f + (drop - 0.180f) / (0.350f - 0.180f) * 30.0f;
   }
-  // 35.0% .. 40.5% drop -> 50 .. 3000 NTU (Very Poor)
-  float maxDrop = 1.0f - (2.5f / 4.2f);
+  // 35.0% .. 75.0% drop -> 50 .. 3000 NTU (Very Poor)
+  float maxDrop = 0.750f;
   float frac = (drop - 0.350f) / (maxDrop - 0.350f);
   float ntu = 50.0f + frac * 2950.0f;
   return ntu > 3000.0f ? 3000.0f : ntu;
@@ -73,7 +73,7 @@ void RollingMedian::clear() { head_ = 0; count_ = 0; }
 bool TimeAnchors::offer(uint16_t boot, uint32_t epoch, uint32_t uptimeS) {
   if (epoch < MIN_EPOCH) return false;
   if (has(boot)) return false;  // first offer wins; never modify an anchor
-  if (n_ > 0 && epoch < a_[n_ - 1].epoch) return false;  // reject backwards clock across boots
+  if (n_ > 0 && epoch + 600u < a_[n_ - 1].epoch) return false;  // allow up to 10 min phone clock skew across boots
   if (n_ == MAX_ANCHORS) {
     for (int i = 1; i < n_; i++) a_[i - 1] = a_[i];
     n_--;

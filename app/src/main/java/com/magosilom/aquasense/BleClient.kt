@@ -193,6 +193,16 @@ class BleClient(ctx: Context) {
         } catch (_: Exception) {}
     }
 
+    private fun unregisterReceiver() {
+        if (!receiverRegistered) return
+        receiverRegistered = false
+        try { appCtx.unregisterReceiver(btReceiver) } catch (_: Exception) {}
+    }
+
+    fun clearCalStatus() {
+        _latestCal.value = null
+    }
+
     fun refreshPairedDevices() {
         if (!hasPermissions()) return
         try {
@@ -500,6 +510,7 @@ class BleClient(ctx: Context) {
         retryJob?.cancel()
         retryJob = null
         stopScanInternal()
+        unregisterReceiver()
         val g = gatt
         gatt = null
         _connected.value = false

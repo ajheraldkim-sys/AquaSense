@@ -65,6 +65,7 @@ fun parseLog(json: String): LogPage {
         val a = aa.getJSONArray(i)
         anchors[a.getInt(0)] = Pair(a.getLong(1), a.getLong(2))
     }
+    val currentBoot = o.getInt("boot")
     val points = ArrayList<Point>()
     val cals = ArrayList<CalEvent>()
     var maxSeq = 0L
@@ -72,15 +73,20 @@ fun parseLog(json: String): LogPage {
     for (i in 0 until ee.length()) {
         val e = ee.getJSONArray(i)
         val seq = e.getLong(0)
-        if (seq > maxSeq) maxSeq = seq
-        if (e.isNull(3)) continue
-        val anchor = anchors[e.getInt(1)] ?: continue
+        val entryBoot = e.getInt(1)
+        val anchor = anchors[entryBoot]
+        // Entries from an earlier un-anchored boot can never be anchored later, so advance past them.
+        // Entries from the current boot when the current boot is not anchored yet must NOT advance maxSeq.
+        if (anchor != null || entryBoot != currentBoot || e.isNull(3)) {
+            if (seq > maxSeq) maxSeq = seq
+        }
+        if (e.isNull(3) || anchor == null) continue
         val ts = anchor.first * 1000L + (e.getLong(2) - anchor.second) * 1000L
         val value = e.getDouble(3)
         if (e.optInt(4, 0) == 1) cals.add(CalEvent(ts, value)) else points.add(Point(ts, value))
     }
     return LogPage(
-        boot = o.getInt("boot"),
+        boot = currentBoot,
         uptimeS = o.getLong("uptime_s"),
         lastSeq = o.getLong("last_seq"),
         oldestSeq = o.getLong("oldest_seq"),

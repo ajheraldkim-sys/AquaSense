@@ -11,7 +11,7 @@ static const float NAN_F = std::nanf("");
 
 static void test_voltsToNtu() {
   CHECK(voltsToNtu(4.2f, 4.2f) == 0.0f);
-  CHECK(voltsToNtu(2.4f, 4.2f) == 3000.0f);
+  CHECK(voltsToNtu(1.0f, 4.2f) == 3000.0f);
   CHECK(voltsToNtu(4.0f, 4.0f) == 0.0f);  // calibrated clean water reads 0
   // 5-tier proportional curve: ~4.76% drop (4.0/4.2) sits in the 1..5 NTU (Good) range
   float ntu = voltsToNtu(4.0f, 4.2f);

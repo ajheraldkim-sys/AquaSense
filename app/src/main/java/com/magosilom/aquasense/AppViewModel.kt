@@ -157,15 +157,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun startCalibration() {
         calJob?.cancel()
+        ble.clearCalStatus()
         _calSession.value = CalUiSession.started()
         calJob = viewModelScope.launch {
-            val startedOk = try {
-                esp.calStart()
-                true
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
+            val useBle = _transport.value == Transport.BLE && ble.connected.value
+            val startedOk = if (useBle) {
                 ble.calStart()
+            } else {
+                try {
+                    esp.calStart()
+                    true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    ble.calStart()
+                }
             }
             if (!startedOk) {
                 Log.w(TAG, "cal start failed on both Wi-Fi and BLE")
@@ -173,12 +179,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             while (isActive) {
-                val s = try {
-                    esp.cal()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
+                val onBleNow = _transport.value == Transport.BLE && ble.connected.value
+                val s = if (onBleNow) {
                     ble.latestCal.value
+                } else {
+                    try {
+                        esp.cal()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        ble.latestCal.value
+                    }
                 }
                 val now = System.currentTimeMillis()
                 val prev = _calSession.value
@@ -213,13 +224,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (n.isEmpty()) return
         _stationFailed.value = false
         viewModelScope.launch {
-            val ok = try {
-                esp.setStation(n)
-                true
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
+            val useBle = _transport.value == Transport.BLE && ble.connected.value
+            val ok = if (useBle) {
                 ble.setStation(n)
+            } else {
+                try {
+                    esp.setStation(n)
+                    true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    ble.setStation(n)
+                }
             }
             if (ok) {
                 updateStation(n)
@@ -282,7 +298,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val now = System.currentTimeMillis() // this reading's own fetch time
             if (r == null) {
                 failures++
-                if (debugBase == null && failures % 5 == 0) joiner.start()
             } else {
                 failures = 0
                 lastWifiOkMs = now
@@ -414,7 +429,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             repeat(MAX_PAGES_PER_SYNC) {
                 val page = esp.log(since, LOG_PAGE_MAX)
                 val now = System.currentTimeMillis()
-                val pts = page.points.sortedBy { it.tsMs }
+                // Clamp imported timestamps to now so a fast clock on another phone never freezes live alerts
+                val pts = page.points.map { if (it.tsMs > now) it.copy(tsMs = now) else it }.sortedBy { it.tsMs }
                 if (pts.isNotEmpty() || page.calEvents.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
                         db.addPoints(pts)
