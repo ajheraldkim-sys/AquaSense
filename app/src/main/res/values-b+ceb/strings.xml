@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Needs native-speaker review -->
+<!-- Needs native-speaker review (open: "Ayaw sa usa imna", "Duol sa estasyon sa tubig" vs "Adto duol sa estasyon") -->
 <resources>
     <string name="notif_channel_alerts">Mga pahibalo sa tubig</string>
-    <string name="notif_cloudy_title">Labog ang tubig</string>
+    <string name="notif_cloudy_title">Lubog ang tubig</string>
     <string name="notif_cloudy_text">Ayaw sa usa imna. Gamita ang tinipigan o gipabukalan nga tubig.</string>
 
     <string name="tab_now">Karon</string>
     <string name="tab_history">Kaniadto</string>
     <string name="tab_settings">Settings</string>
 
-    <string name="state_clear">Klaro</string>
-    <string name="state_getting_cloudy">Nagkalabog na</string>
-    <string name="state_cloudy">Labog — ayaw imna</string>
-    <string name="word_cloudy">Labog</string>
-    <string name="sub_cloudiness">Kalabog %1$s (hangtod %2$s lang dapat)</string>
+    <string name="state_clear">Tin-aw</string>
+    <string name="state_getting_cloudy">Nagkalubog na</string>
+    <string name="state_cloudy">Lubog — ayaw imna</string>
+    <string name="word_cloudy">Lubog</string>
+    <string name="sub_cloudiness">Kalubog %1$s (hangtod %2$s lang dapat)</string>
     <string name="sub_check_soon">Tan-awa pag-usab unya</string>
     <string name="tip_cloudy">Gamita sa usa ang tinipigan o gipabukalan nga tubig.</string>
     <string name="live_updated">Live · gi-update %1$s</string>
@@ -48,10 +48,10 @@
     <string name="got_it">Sige</string>
 
     <string name="about_title">Unsay pasabot sa mga kolor</string>
-    <string name="about_clear">Klaro ang tubig. Ubos kini sa limitasyon.</string>
+    <string name="about_clear">Morag tin-aw ang tubig. Ubos kini sa limitasyon.</string>
     <string name="about_getting_cloudy">Hapit na sa limitasyon. Tan-awa pag-usab unya.</string>
     <string name="about_cloudy">Lapas sa limitasyon. Gamita ang tinipigan o gipabukalan nga tubig.</string>
     <string name="about_grey_title">Walay sukod</string>
     <string name="about_grey">Dili konektado, o dili mogana ang sensor.</string>
-    <string name="about_disclaimer">Ang AquaSense nagsukod lang kung unsa ka labog ang tubig. Bisan klaro ang tubig, mahimo gihapon kining adunay mikrobyo o kemikal nga dili makita sa sensor. Ang lab test o ang inyong RHU (Rural Health Unit) lang ang makasulti kung mahimo na bang imnon ang tubig.</string>
+    <string name="about_disclaimer">Ang AquaSense nagsukod lang kung unsa ka lubog ang tubig. Bisan tin-aw ang tubig, mahimo gihapon kining adunay mikrobyo o kemikal nga dili makita sa sensor. Ang lab test o ang inyong RHU (Rural Health Unit) lang ang makasulti kung mahimo na bang imnon ang tubig.</string>
 </resources>

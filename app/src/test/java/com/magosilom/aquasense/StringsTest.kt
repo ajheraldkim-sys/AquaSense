@@ -68,14 +68,25 @@ class StringsTest {
         assertEquals("Last 24 hours", en["last_24h"])
     }
 
+    /** Every resource XML in every values* folder, not only strings.xml. */
     @Test fun neverSaysSafe() {
         val banned = listOf("safe", "ligtas", "luwas")
-        for ((name, t) in listOf("values" to en, "fil" to fil, "ceb" to ceb)) {
-            for ((k, v) in t) {
-                val hit = banned.firstOrNull { v.contains(it, ignoreCase = true) }
-                assertNull("$name/$k contains '$hit': $v", hit)
-            }
+        val files = res.listFiles { f -> f.isDirectory && f.name.startsWith("values") }!!
+            .flatMap { d -> d.listFiles { f -> f.name.endsWith(".xml") }!!.toList() }
+        assertTrue("no values*/*.xml found", files.size >= 4)
+        for (f in files) {
+            val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(f)
+            val text = doc.documentElement.textContent
+            val hit = banned.firstOrNull { text.contains(it, ignoreCase = true) }
+            assertNull("${f.parentFile.name}/${f.name} contains '$hit'", hit)
         }
+    }
+
+    /** Cebuano: "labog" means "to throw"; murky water is "lubog". */
+    @Test fun cebuanoUsesLubogNotLabog() {
+        for ((k, v) in ceb) assertFalse("ceb/$k uses 'labog': $v", v.contains("labog", ignoreCase = true))
+        assertTrue(ceb["state_cloudy"]!!.contains("Lubog"))
+        assertEquals("Tin-aw", ceb["state_clear"])
     }
 
     @Test fun nowScreenHasNoJargon() {

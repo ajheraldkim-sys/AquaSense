@@ -47,6 +47,12 @@ val Blue = Color(0xFF1E7FD0)
 val Amber = Color(0xFFE39A12)
 val Red = Color(0xFFD9483B)
 val Grey = Color(0xFF9AA7B2)
+/** Amber for text on the light background (~5:1); plain [Amber] is only for dots and shapes. */
+val AmberTextLight = Color(0xFF9A6200)
+
+/** Amber text colour with >= 4.5:1 contrast in both themes. */
+@Composable
+fun amberText(): Color = if (isSystemInDarkTheme()) Amber else AmberTextLight
 val Ink = Color(0xFF10293B)
 
 private val LightColors = lightColorScheme(

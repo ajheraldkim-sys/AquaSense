@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -56,11 +57,13 @@ fun Dot(color: Color, size: Dp = 10.dp) = Box(Modifier.size(size).background(col
  * Pulses gently while live data is flowing.
  */
 @Composable
-fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp, greyMark: String = "?") {
+fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp, greyMark: String = "?", greyIcon: ImageVector? = null) {
     val color by animateColorAsState(levelColor(level), tween(600), label = "orb")
     val t = rememberInfiniteTransition(label = "pulse")
     val pulse by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "p")
-    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+    // Decorative: the big state text right below says the same thing, so TalkBack reads it once
+    // (and never reads the glyph as "question mark" / "exclamation mark").
+    Box(Modifier.size(size).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
         Canvas(Modifier.matchParentSize()) {
             val r = this.size.minDimension / 2
             if (pulsing) drawCircle(color.copy(alpha = 0.18f * (1 - pulse)), radius = r * (0.78f + 0.22f * pulse))
@@ -68,7 +71,7 @@ fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp, greyMark: Stri
             drawCircle(color.copy(alpha = 0.22f), radius = r * 0.62f)
             drawCircle(color, radius = r * 0.46f)
         }
-        val icon = levelIcon(level)
+        val icon = levelIcon(level) ?: greyIcon
         if (icon != null) Icon(icon, null, Modifier.size(size * 0.26f), tint = Color.White)
         else Text(greyMark, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
     }
@@ -94,7 +97,7 @@ fun TurbidityBar(
     val marker = levelColor(level)
     Panel(modifier) {
         Text(value?.let { if (it < 100) f1(it) else it.toInt().toString() } ?: "—",
-            fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 30.sp, color = marker)
+            fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 30.sp)
         Spacer(Modifier.height(16.dp))
         Canvas(Modifier.fillMaxWidth().height(28.dp)) {
             val h = 12.dp.toPx(); val y = (size.height - h) / 2

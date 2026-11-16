@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -16,6 +17,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -113,8 +115,6 @@ fun NowScreen(vm: AppViewModel) {
     var lastLimit by remember { mutableDoubleStateOf(DEFAULT_LIMIT) }
     val limit = (screen as? Screen.Live)?.limit ?: lastLimit
     SideEffect { lastLimit = limit }
-    val now = rememberNow()
-
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -134,12 +134,13 @@ fun NowScreen(vm: AppViewModel) {
         if (!wifiSupported) JoinWifiHint(screen)
 
         when (val s = screen) {
-            is Screen.Live -> LiveStatus(s, now)
-            Screen.Connecting -> GreyStatus("…", pulsing = true, stringResource(R.string.connecting), null)
-            Screen.SensorProblem -> GreyStatus("!", pulsing = false,
-                stringResource(R.string.sensor_problem), stringResource(R.string.tell_caretaker))
+            is Screen.Live -> LiveStatus(s)
+            Screen.Connecting -> GreyStatus("…", pulsing = true, title = stringResource(R.string.connecting), sub = null)
+            // Wrench, not "!": must not look like the amber "Getting cloudy" mark.
+            Screen.SensorProblem -> GreyStatus("", pulsing = false, icon = Icons.Default.Build,
+                title = stringResource(R.string.sensor_problem), sub = stringResource(R.string.tell_caretaker))
             is Screen.NotConnected -> GreyStatus("?", pulsing = false,
-                stringResource(R.string.not_connected), stringResource(R.string.go_near)) {
+                title = stringResource(R.string.not_connected), sub = stringResource(R.string.go_near)) {
                 val seen = s.lastSeen
                 val st = s.lastState
                 if (seen != null && st != null) Caption(stringResource(R.string.last_seen, clockText(seen.tsMs), stateWord(st)))
@@ -149,7 +150,7 @@ fun NowScreen(vm: AppViewModel) {
         if (needsCleaning) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Dot(Amber); Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.needs_cleaning), color = Amber, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.needs_cleaning), color = amberText(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
 
@@ -160,7 +161,7 @@ fun NowScreen(vm: AppViewModel) {
 }
 
 @Composable
-private fun LiveStatus(s: Screen.Live, now: Long) {
+private fun LiveStatus(s: Screen.Live) {
     val level = s.state.level()
     StatusOrb(level, pulsing = true)
     Text(stateText(s.state), fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 36.sp,
@@ -172,7 +173,7 @@ private fun LiveStatus(s: Screen.Live, now: Long) {
     )
     TurbidityBar(s.ntu, s.limit, level, stringResource(R.string.state_clear), stringResource(R.string.word_cloudy),
         Modifier.fillMaxWidth())
-    LiveLine(stringResource(R.string.live_updated, agoText(s.updatedAtMs, now)))
+    LiveLine(s.updatedAtMs)
     if (s.state == WaterState.CLOUDY) {
         Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small, color = Red.copy(alpha = 0.12f)) {
             Text(stringResource(R.string.tip_cloudy), Modifier.padding(14.dp), fontWeight = FontWeight.SemiBold,
@@ -181,9 +182,11 @@ private fun LiveStatus(s: Screen.Live, now: Long) {
     }
 }
 
-/** Small "Live · updated …" line with a softly pulsing dot. */
+/** Small "Live · updated …" line with a softly pulsing dot. Only this line ticks every second. */
 @Composable
-private fun LiveLine(text: String) {
+private fun LiveLine(updatedAtMs: Long) {
+    val now = rememberNow()
+    val text = stringResource(R.string.live_updated, agoText(updatedAtMs, now))
     val t = rememberInfiniteTransition(label = "live")
     val a by t.animateFloat(0.3f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "a")
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -194,8 +197,11 @@ private fun LiveLine(text: String) {
 }
 
 @Composable
-private fun GreyStatus(mark: String, pulsing: Boolean, title: String, sub: String?, extra: @Composable () -> Unit = {}) {
-    StatusOrb(null, pulsing = pulsing, greyMark = mark)
+private fun GreyStatus(
+    mark: String, pulsing: Boolean, title: String, sub: String?,
+    icon: ImageVector? = null, extra: @Composable () -> Unit = {},
+) {
+    StatusOrb(null, pulsing = pulsing, greyMark = mark, greyIcon = icon)
     Text(title, fontSize = 26.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp, textAlign = TextAlign.Center)
     if (sub != null) Text(sub, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
     extra()
