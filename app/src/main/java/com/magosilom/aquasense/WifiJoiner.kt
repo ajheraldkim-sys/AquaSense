@@ -42,8 +42,13 @@ class WifiJoiner(ctx: Context) {
             .build()
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) { _network.value = network }
-            override fun onLost(network: Network) { _network.value = null }
-            override fun onUnavailable() { _network.value = null }
+            override fun onLost(network: Network) { _network.compareAndSet(network, null) }
+            override fun onUnavailable() {
+                // Request ended (e.g. the user declined): forget it so a later start() retries.
+                synchronized(this@WifiJoiner) { if (callback === this) callback = null }
+                try { cm.unregisterNetworkCallback(this) } catch (_: RuntimeException) {}
+                _network.value = null
+            }
         }
         callback = cb
         try {

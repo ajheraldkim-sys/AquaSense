@@ -1,210 +1,335 @@
 package com.magosilom.aquasense
 
 import android.app.Application
+import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.IOException
+import kotlinx.coroutines.withContext
+import java.time.ZoneId
 
-/** Samples per "Measure" press, and spacing (ESP32 refreshes its values every ~1 s). */
-private const val MEASURE_SAMPLES = 5
-private const val SAMPLE_GAP_MS = 1200L
+private const val TAG = "AquaSense"
+private const val POLL_MS = 1000L
+private const val CAL_POLL_MS = 1000L
+private const val LOG_PAGE_MAX = 100
+/** Pages per sync cycle (12,000 entries) so a first sync can't starve live polling. */
+private const val MAX_PAGES_PER_CYCLE = 120
+/** v3: re-page the minute log this often while connected so History keeps filling in. */
+private const val LOG_REFRESH_MS = 60_000L
+private const val DAY_MS = 86_400_000L
+private const val KEEP_MS = 35 * DAY_MS
+private const val META_LAST_SEQ = "last_seq"
 
-/** Live mode: poll often for display, but only store a smoothed reading every [LIVE_SAVE_MS]. */
-private const val LIVE_POLL_MS = 2000L
-private const val LIVE_SAVE_MS = 30_000L
-private const val LIVE_WINDOW = 5
-
-private const val MAX_READINGS = 1000
-
+/**
+ * Automatic live controller. While in the foreground: joins the ESP32 Wi-Fi, polls /readings every
+ * second, keeps the ESP32 clock set, imports its minute log, runs the alert engine and notifies.
+ * The UI only reads the StateFlows below and calls [setForeground], [startCalibration],
+ * [stopCalibration] and [setStation].
+ */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
+    private val prefs = app.getSharedPreferences("aquasense", Context.MODE_PRIVATE)
     private val store = Store(app)
+    private val db = HistoryDb(app)
+    private val joiner = WifiJoiner(app)
+    private val engine = AlertEngine()
+    private val zone: ZoneId get() = ZoneId.systemDefault()
 
-    val sources = MutableStateFlow(store.sources())
-    val readings = MutableStateFlow(store.readings())
-    val alerts = MutableStateFlow(store.alerts())
-    val limits = MutableStateFlow(store.limits())
-    val esp = MutableStateFlow(store.esp())
-    val location = MutableStateFlow(store.location())
-    val selected = MutableStateFlow(sources.value.first().id)
+    /** R6: debug builds can point at an emulator-reachable fake ESP32 and skip the Wi-Fi join. */
+    private val debugBase: String? =
+        if (BuildConfig.DEBUG) prefs.getString("debug_esp_base", null)?.trim()?.takeIf { it.isNotEmpty() } else null
+    private val esp = EspClient(debugBase ?: ESP_BASE) { if (debugBase != null) null else joiner.network.value }
 
-    val link = MutableStateFlow(Link.IDLE)
-    val lastContact = MutableStateFlow<Long?>(null)
-    /** Smoothed live value (median of the last few samples), shown while Live is on. */
-    val liveSample = MutableStateFlow<Sample?>(null)
-    val live = MutableStateFlow(false)
-    val measuring = MutableStateFlow(false)
-    val progress = MutableStateFlow(0f)
-    val message = MutableStateFlow<String?>(null)
-    val testStatus = MutableStateFlow<Pair<Boolean, String>?>(null)
-    val testingEsp = MutableStateFlow(false)
+    private val _screen = MutableStateFlow<Screen>(Screen.Connecting)
+    val screen: StateFlow<Screen> = _screen
+    private val _history24h = MutableStateFlow<List<Point>>(emptyList())
+    val history24h: StateFlow<List<Point>> = _history24h
+    private val _days = MutableStateFlow<List<DaySummary>>(emptyList())
+    val days: StateFlow<List<DaySummary>> = _days
+    private val _alerts = MutableStateFlow<List<AlertRow>>(emptyList())
+    val alerts: StateFlow<List<AlertRow>> = _alerts
+    private val _needsCleaning = MutableStateFlow(false)
+    val needsCleaning: StateFlow<Boolean> = _needsCleaning
+    private val _station = MutableStateFlow(store.location())
+    val station: StateFlow<String> = _station
+    private val _cal = MutableStateFlow<CalStatus?>(null)
+    val cal: StateFlow<CalStatus?> = _cal
+    private val _lastCal = MutableStateFlow<CalEvent?>(null)
+    val lastCal: StateFlow<CalEvent?> = _lastCal
+    private val _wifiSupported = MutableStateFlow(joiner.supported)
+    val wifiSupported: StateFlow<Boolean> = _wifiSupported
 
-    private var liveJob: Job? = null
-    private var foreground = true
+    /** Latest limit seen from the ESP32 (used for summaries and imported points). */
+    @Volatile private var limit = DEFAULT_LIMIT
+    private var lastSeen: Point? = null
 
-    init { store.saveSources(sources.value) }
-
-    private fun sensor(url: String = esp.value.url) = Esp32Sensor(url, getApplication())
-
-    /** One raw sample, or null on failure. Rejects stale data from a hung ESP32. */
-    private suspend fun sampleOnce(s: Esp32Sensor): Sample? = runCatching {
-        val x = s.read()
-        if ((x.ageMs ?: 0L) > MAX_SAMPLE_AGE_MS) throw IOException("stale")
-        x
-    }.onSuccess {
-        link.value = Link.ONLINE; lastContact.value = System.currentTimeMillis()
-    }.onFailure {
-        link.value = Link.OFFLINE
-    }.getOrNull()
-
-    // ------------------------------------------------------------ measuring
-    /** Takes several samples and stores their median: one noisy spike can't raise an alert. */
-    fun measure() {
-        if (measuring.value || live.value) return
-        val src = currentSource() ?: return
-        viewModelScope.launch {
-            measuring.value = true; progress.value = 0f
-            link.value = Link.CONNECTING
-            val s = sensor()
-            val got = mutableListOf<Sample>()
-            var fails = 0
-            for (i in 0 until MEASURE_SAMPLES) {
-                sampleOnce(s)?.let { got += it } ?: fails++
-                progress.value = (i + 1f) / MEASURE_SAMPLES
-                if (fails >= 2 && got.isEmpty()) break
-                if (i < MEASURE_SAMPLES - 1) delay(SAMPLE_GAP_MS)
+    private val dbReady: Job = viewModelScope.launch {
+        withContext(Dispatchers.IO) {
+            try {
+                migrateIfNeeded(app, db)
+                db.prune(System.currentTimeMillis() - KEEP_MS)
+            } catch (e: Exception) {
+                Log.w(TAG, "history init failed", e)
             }
-            if (got.size >= 3) {
-                save(combine(got), got.size, src, announce = true)
-            } else {
-                message.value = "Can't reach the sensor. Connect to the AquaSense-ESP32 Wi-Fi."
-            }
-            measuring.value = false; progress.value = 0f
         }
+        refreshHistory()
+        lastSeen = _history24h.value.lastOrNull()
     }
 
-    fun setLive(on: Boolean) {
-        live.value = on
-        restartLive()
-    }
+    private var pollJob: Job? = null
+    private var calJob: Job? = null
 
-    /** Called from the UI lifecycle: live polling pauses while the app is in the background. */
+    // ---------------------------------------------------------------- actions
+
+    /** Called from the activity lifecycle: everything network-related runs only in the foreground. */
     fun setForeground(fg: Boolean) {
-        foreground = fg
-        restartLive()
+        if (fg) {
+            if (pollJob?.isActive == true) return
+            if (debugBase == null) joiner.start()
+            pollJob = viewModelScope.launch { pollLoop() }
+        } else {
+            pollJob?.cancel(); pollJob = null
+            calJob?.cancel(); calJob = null
+            joiner.stop()
+        }
     }
 
-    private fun restartLive() {
-        liveJob?.cancel(); liveJob = null
-        if (!live.value || !foreground) { liveSample.value = null; return }
-        liveJob = viewModelScope.launch {
-            val window = ArrayDeque<Sample>()
-            var lastSave = System.currentTimeMillis()
-            link.value = Link.CONNECTING
-            val s = sensor()
+    /** Starts calibration on the ESP32 and polls /cal every second until it ends or [stopCalibration]. */
+    fun startCalibration() {
+        calJob?.cancel()
+        calJob = viewModelScope.launch {
+            _cal.value = null
+            try { esp.calStart() } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                Log.w(TAG, "cal start failed", e)
+            }
             while (isActive) {
-                val x = sampleOnce(s)
-                if (x != null) {
-                    window.addLast(x); if (window.size > LIVE_WINDOW) window.removeFirst()
-                    liveSample.value = combine(window.toList())
-                    val now = System.currentTimeMillis()
-                    if (window.size >= 3 && now - lastSave >= LIVE_SAVE_MS) {
-                        currentSource()?.let { save(combine(window.toList()), window.size, it, announce = false) }
-                        lastSave = now
+                val s = try { esp.cal() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+                if (s != null) {
+                    _cal.value = s
+                    if (s.phase == CalPhase.DONE) {
+                        s.calVolts?.let { _lastCal.value = CalEvent(System.currentTimeMillis(), it) }
+                        logDue = true // the ESP32 logs the calibration; pull it into history
                     }
-                } else {
-                    window.clear(); liveSample.value = null
+                    if (s.phase == CalPhase.DONE || s.phase == CalPhase.REJECTED || s.phase == CalPhase.EXPIRED) break
                 }
-                delay(LIVE_POLL_MS)
+                delay(CAL_POLL_MS)
             }
         }
     }
 
-    private fun currentSource() = sources.value.firstOrNull { it.id == selected.value }
-
-    private fun save(x: Sample, n: Int, src: Source, announce: Boolean) {
-        val r = Reading(sourceId = src.id, ts = System.currentTimeMillis(), turbidity = x.turbidity, samples = n)
-        readings.value = (listOf(r) + readings.value).take(MAX_READINGS)
-        store.saveReadings(readings.value)
-
-        val a = assess(r, limits.value)
-        val current = alerts.value.toMutableList()
-        a.issue?.let { issue ->
-            val exists = current.any { !it.resolved && it.sourceId == src.id && it.key == issue.key }
-            if (!exists) {
-                current.add(0, AlertItem(sourceId = src.id, key = issue.key, message = issue.text, ts = r.ts))
-                alerts.value = current; store.saveAlerts(current)
-                Notifier.alert(getApplication(), "${src.id}:${issue.key}", "${src.name}: ${issue.short}",
-                    "${issue.text} Avoid drinking until tested.")
-            }
-        }
-        if (announce) message.value = "Saved · ${a.level.label}"
+    /** Calibration UI closed: stop polling /cal. */
+    fun stopCalibration() {
+        calJob?.cancel(); calJob = null
+        _cal.value = null
     }
 
-    fun clearHistory(sourceId: String?) {
-        readings.value = if (sourceId == null) emptyList() else readings.value.filter { it.sourceId != sourceId }
-        store.saveReadings(readings.value)
-    }
-
-    // -------------------------------------------------------------- alerts
-    fun resolveAlert(id: String) {
-        alerts.value = alerts.value.map { if (it.id == id) it.copy(resolved = true) else it }
-        store.saveAlerts(alerts.value)
-    }
-    fun resolveAll() {
-        alerts.value = alerts.value.map { it.copy(resolved = true) }
-        store.saveAlerts(alerts.value)
-    }
-
-    // ------------------------------------------------------------- sources
-    fun saveSource(s: Source) {
-        val l = sources.value
-        sources.value = if (l.any { it.id == s.id }) l.map { if (it.id == s.id) s else it } else l + s
-        store.saveSources(sources.value)
-    }
-
-    fun deleteSource(id: String) {
-        if (sources.value.size <= 1) { message.value = "Keep at least one water source."; return }
-        sources.value = sources.value.filter { it.id != id }
-        readings.value = readings.value.filter { it.sourceId != id }
-        alerts.value = alerts.value.filter { it.sourceId != id }
-        store.saveSources(sources.value); store.saveReadings(readings.value); store.saveAlerts(alerts.value)
-        if (selected.value == id) selected.value = sources.value.first().id
-    }
-
-    // ------------------------------------------------------------ settings
-    fun saveLimits(l: Limits) { limits.value = l; store.saveLimits(l) }
-    fun saveEsp(c: EspConfig) { esp.value = c; store.saveEsp(c); restartLive() }
-
-    fun saveLocation(loc: String) {
-        val t = loc.trim()
-        if (t.isEmpty()) return
-        location.value = t
-        store.saveLocation(t)
-    }
-
-    fun testEspConnection(testUrl: String) {
+    fun setStation(name: String) {
+        val n = name.trim()
+        if (n.isEmpty()) return
         viewModelScope.launch {
-            testingEsp.value = true
-            testStatus.value = null
-            val start = System.currentTimeMillis()
-            runCatching { sensor(testUrl.trim()).read() }
-                .onSuccess { x ->
-                    val ms = System.currentTimeMillis() - start
-                    val stale = (x.ageMs ?: 0L) > MAX_SAMPLE_AGE_MS
-                    testStatus.value = !stale to (if (stale) "Connected, but sensor data is stale. Restart the ESP32."
-                        else "Connected in $ms ms · raw sample ${f1(x.turbidity)} NTU (use Measure for an accurate reading)")
-                }
-                .onFailure {
-                    testStatus.value = false to if (it.message == "No turbidity value")
-                        "Connected, but the turbidity sensor sends no data. Check its wiring."
-                    else "Not reachable. Join the AquaSense-ESP32 Wi-Fi and check the address."
-                }
-            testingEsp.value = false
+            try {
+                esp.setStation(n)
+                updateStation(n)
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                Log.w(TAG, "setStation failed", e)
+            }
         }
+    }
+
+    private fun updateStation(n: String) {
+        if (_station.value == n) return
+        _station.value = n
+        store.saveLocation(n)
+    }
+
+    // ------------------------------------------------------------- live loop
+
+    // Loop state (only touched from the poll coroutine on Main, plus the logDue flag).
+    @Volatile private var logDue = false
+
+    private suspend fun pollLoop() {
+        dbReady.join()
+        val startedMs = System.currentTimeMillis()
+        var failures = 0
+        var reading: LiveReading? = null
+        var receivedAt: Long? = null
+        var prevBoot: Int? = null
+        var logSupported = true
+        var timeDue = false
+        var lastLogMs = 0L
+        var wasDisconnected = false
+        var minute = -1L
+        val minuteVals = ArrayList<Double>()
+
+        var importFailures = 0
+
+        while (currentCoroutineContext().isActive) {
+            val r = try { esp.readings() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+            val now = System.currentTimeMillis()
+            if (r == null) {
+                failures++
+            } else {
+                failures = 0
+                // R3: on each (re)connect, sync before live samples reach the alert engine.
+                if (wasDisconnected) prevBoot = null
+                val d = onReading(prevBoot, r, logSupported)
+                prevBoot = r.boot
+                if (d.sendTime) timeDue = true
+                if (d.importLog) logDue = true
+                if (r.isV3 && logSupported && now - lastLogMs >= LOG_REFRESH_MS) logDue = true
+                limit = r.limit
+                r.station?.takeIf { it.isNotBlank() }?.let { updateStation(it) }
+
+                if (timeDue && r.isV3) {
+                    try { esp.postTime(now / 1000); timeDue = false }
+                    catch (e: CancellationException) { throw e } catch (e: Exception) { Log.w(TAG, "postTime failed", e) }
+                }
+                if (logDue && r.isV3 && logSupported) {
+                    try {
+                        if (importLog(r.limit)) { logDue = false; lastLogMs = now }
+                        importFailures = 0
+                    } catch (e: CancellationException) { throw e } catch (e: Unsupported) {
+                        logSupported = false; logDue = false
+                    } catch (e: Exception) {
+                        Log.w(TAG, "log import failed", e)
+                        // Don't hold live alerts hostage to a failing /log: retry at the next refresh.
+                        if (++importFailures >= 3) { logDue = false; lastLogMs = now; importFailures = 0 }
+                    }
+                }
+
+                reading = r
+                receivedAt = now
+                val ntu = r.turbidity
+                val fresh = ntu != null && (r.ageMs ?: 0L) <= READING_STALE_MS
+                if (fresh && ntu != null) {
+                    lastSeen = Point(now, ntu)
+                    // Imported points must precede live samples: hold live alerts until the import finished.
+                    if (!logDue) handle(engine.onLive(ntu, r.limit, now))
+                    // v2 firmware (no /log): keep one median point per minute ourselves.
+                    if (!r.isV3 || !logSupported) {
+                        val m = now / 60_000L
+                        if (m != minute) {
+                            if (minuteVals.isNotEmpty() && minute >= 0) savePoint(Point(minute * 60_000L, medianOf(minuteVals)))
+                            minuteVals.clear(); minute = m
+                        }
+                        minuteVals.add(ntu)
+                    }
+                }
+            }
+            val after = System.currentTimeMillis()
+            wasDisconnected = shouldShowNotConnected(failures, receivedAt, after, startedMs)
+            _screen.value = displayScreen(reading, receivedAt, lastSeen, failures, startedMs, after)
+            delay(if (failures == 0) POLL_MS else backoffMs(failures))
+        }
+    }
+
+    /**
+     * Pages /log from the persisted cursor. Returns true when caught up, false when the page cap
+     * was hit (continue next cycle). Never loops forever on an empty page.
+     */
+    private suspend fun importLog(limit: Double): Boolean {
+        var since = withContext(Dispatchers.IO) { db.meta(META_LAST_SEQ)?.toLongOrNull() ?: 0L }
+        var jumped = false
+        try {
+            repeat(MAX_PAGES_PER_CYCLE) {
+                val page = esp.log(since, LOG_PAGE_MAX)
+                if (page.maxSeqInPage == 0L) {
+                    // entries:[] — if entries before oldest_seq were dropped, skip past the gap once.
+                    if (page.lastSeq > since && !jumped && page.oldestSeq - 1 > since) {
+                        jumped = true
+                        since = page.oldestSeq - 1
+                        saveCursor(since)
+                        return@repeat
+                    }
+                    return true
+                }
+                val now = System.currentTimeMillis()
+                val pts = page.points.sortedBy { it.tsMs }
+                withContext(Dispatchers.IO) {
+                    db.addPoints(pts)
+                    db.addCalEvents(page.calEvents)
+                }
+                for (p in pts) handle(engine.onImported(p, limit, now))
+                if (page.maxSeqInPage <= since) return true // no progress: stop this cycle
+                since = page.maxSeqInPage
+                saveCursor(since)
+                if (since >= page.lastSeq) return true
+            }
+            return false
+        } finally {
+            refreshHistory()
+        }
+    }
+
+    private suspend fun saveCursor(seq: Long) =
+        withContext(Dispatchers.IO) { db.setMeta(META_LAST_SEQ, seq.toString()) }
+
+    private suspend fun savePoint(p: Point) {
+        withContext(Dispatchers.IO) { db.addPoints(listOf(p)) }
+        refreshHistory()
+    }
+
+    /** Persists alert events; notifies only on a fresh Opened. */
+    private suspend fun handle(e: AlertEvent?) {
+        when (e) {
+            null -> return
+            is AlertEvent.Opened -> {
+                withContext(Dispatchers.IO) { db.openAlert(e.atMs, e.ntu) }
+                if (e.notify) Notifier.alert(getApplication(), R.string.notif_cloudy_title, R.string.notif_cloudy_text)
+            }
+            is AlertEvent.Closed -> withContext(Dispatchers.IO) { db.closeAlert(e.atMs) }
+        }
+        refreshHistory()
+    }
+
+    private suspend fun refreshHistory() {
+        val now = System.currentTimeMillis()
+        val z = zone
+        val lim = limit
+        try {
+            val snap = withContext(Dispatchers.IO) {
+                val recent = db.points(now - DAY_MS)
+                val week = db.points(now - 7 * DAY_MS)
+                Snapshot(
+                    history24h = recent,
+                    days = summarizeDays(week, lim, z),
+                    alerts = db.alerts(now - 30 * DAY_MS),
+                    needsCleaning = needsCleaning(db.dailyMinimums(7, z)),
+                    lastCal = db.lastCalEvent(),
+                )
+            }
+            _history24h.value = snap.history24h
+            _days.value = snap.days
+            _alerts.value = snap.alerts
+            _needsCleaning.value = snap.needsCleaning
+            val dbCal = snap.lastCal
+            val memCal = _lastCal.value
+            if (dbCal != null && (memCal == null || dbCal.tsMs >= memCal.tsMs)) _lastCal.value = dbCal
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "history refresh failed", e)
+        }
+    }
+
+    private class Snapshot(
+        val history24h: List<Point>,
+        val days: List<DaySummary>,
+        val alerts: List<AlertRow>,
+        val needsCleaning: Boolean,
+        val lastCal: CalEvent?,
+    )
+
+    override fun onCleared() {
+        joiner.stop()
+        db.close()
     }
 }

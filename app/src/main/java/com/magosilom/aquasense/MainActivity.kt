@@ -93,11 +93,8 @@ fun AquaApp(vm: AppViewModel = viewModel()) {
     val nav = rememberNavController()
     val route = nav.currentBackStackEntryAsState().value?.destination?.route ?: "now"
     val snack = remember { SnackbarHostState() }
-    val msg by vm.message.collectAsState()
     val alerts by vm.alerts.collectAsState()
-    val open = alerts.count { !it.resolved }
-
-    LaunchedEffect(msg) { msg?.let { vm.message.value = null; snack.showSnackbar(it) } }
+    val open = alerts.count { it.closedMs == null }
 
     // Pause live polling when the app is not visible (saves battery, avoids silent background traffic).
     val owner = LocalLifecycleOwner.current
