@@ -23,16 +23,25 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
-fun levelColor(l: Level?) = when (l) { Level.UNSAFE -> Red; Level.CAUTION -> Amber; Level.WITHIN -> Blue; null -> Grey }
-fun levelIcon(l: Level?): ImageVector? = when (l) {
-    Level.WITHIN -> Icons.Default.Check; Level.CAUTION -> Icons.Default.Warning; Level.UNSAFE -> Icons.Default.Close; null -> null
+/** Status colour; null (no reading) is grey. */
+fun stateColor(s: WaterState?) = when (s) {
+    WaterState.CLOUDY -> Red; WaterState.GETTING_CLOUDY -> Amber; WaterState.CLEAR -> Blue; null -> Grey
+}
+fun stateIcon(s: WaterState?): ImageVector? = when (s) {
+    WaterState.CLEAR -> Icons.Default.Check; WaterState.GETTING_CLOUDY -> Icons.Default.Warning
+    WaterState.CLOUDY -> Icons.Default.Close; null -> null
 }
 
 /** Plain rounded surface used everywhere instead of heavy cards. */
@@ -57,8 +66,8 @@ fun Dot(color: Color, size: Dp = 10.dp) = Box(Modifier.size(size).background(col
  * Pulses gently while live data is flowing.
  */
 @Composable
-fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp, greyMark: String = "?", greyIcon: ImageVector? = null) {
-    val color by animateColorAsState(levelColor(level), tween(600), label = "orb")
+fun StatusOrb(state: WaterState?, pulsing: Boolean, size: Dp = 168.dp, greyMark: String = "?", greyIcon: ImageVector? = null) {
+    val color by animateColorAsState(stateColor(state), tween(600), label = "orb")
     val t = rememberInfiniteTransition(label = "pulse")
     val pulse by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "p")
     // Decorative: the big state text right below says the same thing, so TalkBack reads it once
@@ -71,7 +80,7 @@ fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp, greyMark: Stri
             drawCircle(color.copy(alpha = 0.22f), radius = r * 0.62f)
             drawCircle(color, radius = r * 0.46f)
         }
-        val icon = levelIcon(level) ?: greyIcon
+        val icon = stateIcon(state) ?: greyIcon
         if (icon != null) Icon(icon, null, Modifier.size(size * 0.26f), tint = Color.White)
         else Text(greyMark, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
     }
@@ -86,7 +95,7 @@ fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp, greyMark: Stri
  */
 @Composable
 fun TurbidityBar(
-    value: Double?, limit: Double, level: Level?, clearLabel: String, cloudyLabel: String,
+    value: Double?, limit: Double, state: WaterState?, clearLabel: String, cloudyLabel: String,
     modifier: Modifier = Modifier,
 ) {
     val scaleMax = maxOf(limit * 2, (value ?: 0.0) * 1.15)
@@ -94,7 +103,7 @@ fun TurbidityBar(
         if (value == null) 0f else (value / scaleMax).toFloat().coerceIn(0f, 1f), tween(700), label = "t"
     )
     val track = MaterialTheme.colorScheme.surfaceVariant
-    val marker = levelColor(level)
+    val marker = stateColor(state)
     Panel(modifier) {
         Text(value?.let { if (it < 100) f1(it) else it.toInt().toString() } ?: "—",
             fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 30.sp)
@@ -194,6 +203,107 @@ private fun LegendRow(c: Color, title: String, text: String) {
         Column {
             Text(title, fontWeight = FontWeight.SemiBold)
             Caption(text)
+        }
+    }
+}
+
+// ----------------------------------------------------------- calibration steps
+
+/** Ring that fills (0..1) as the sensor stays steady, or drains during the button countdown. */
+@Composable
+fun ProgressRing(
+    fraction: Float, description: String, color: Color = Blue, size: Dp = 112.dp,
+    center: @Composable () -> Unit = {},
+) {
+    val f by animateFloatAsState(fraction.coerceIn(0f, 1f), tween(800), label = "ring")
+    val track = MaterialTheme.colorScheme.surfaceVariant
+    Box(
+        Modifier.size(size).clearAndSetSemantics {
+            contentDescription = description
+            progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.matchParentSize()) {
+            val w = 12.dp.toPx()
+            val tl = Offset(w / 2, w / 2)
+            val arc = Size(this.size.width - w, this.size.height - w)
+            drawArc(track, 0f, 360f, false, tl, arc, style = Stroke(w))
+            if (f > 0f) drawArc(color, -90f, 360f * f, false, tl, arc, style = Stroke(w, cap = StrokeCap.Round))
+        }
+        center()
+    }
+}
+
+private const val READY_WINDOW_S = 60
+
+/**
+ * The calibration flow, driven only by [cal] (the ESP32's /cal status):
+ * step 1 + Start → SETTLING (steady ring) → READY (press the button, 60 s countdown) →
+ * DONE / REJECTED (plain reason) / EXPIRED. [started] covers the moment between Start and the
+ * first /cal answer. [reachable] false (no sensor Wi-Fi or old firmware) disables Start.
+ * No volts or technical words are shown.
+ */
+@Composable
+fun CalibrationSteps(
+    cal: CalStatus?, started: Boolean, reachable: Boolean,
+    onStart: () -> Unit, onClose: () -> Unit,
+) {
+    val phase = cal?.phase
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        when {
+            phase == null && !started -> {
+                Text(stringResource(R.string.cal_step1), Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
+                if (!reachable) Caption(stringResource(R.string.cal_needs_wifi), Modifier.fillMaxWidth())
+                Button(onStart, Modifier.fillMaxWidth(), enabled = reachable) { Text(stringResource(R.string.cal_start)) }
+            }
+            phase == null || phase == CalPhase.IDLE -> {
+                CircularProgressIndicator()
+                Text(stringResource(R.string.cal_starting), textAlign = TextAlign.Center)
+                OutlinedButton(onClose) { Text(stringResource(R.string.cal_cancel)) }
+            }
+            phase == CalPhase.SETTLING -> {
+                val s = cal.secondsStable.coerceIn(0, 60)
+                ProgressRing(s / 60f, stringResource(R.string.cal_progress, s))
+                Text(stringResource(R.string.cal_settling), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+                OutlinedButton(onClose) { Text(stringResource(R.string.cal_cancel)) }
+            }
+            phase == CalPhase.READY -> {
+                // The ESP32 only accepts the button within 60 s of "ready"; count down from when we saw it.
+                val readyAt = remember { System.currentTimeMillis() }
+                val left by produceState(READY_WINDOW_S) {
+                    while (value > 0) {
+                        delay(1000)
+                        value = (READY_WINDOW_S - ((System.currentTimeMillis() - readyAt) / 1000).toInt()).coerceAtLeast(0)
+                    }
+                }
+                val leftText = LocalContext.current.resources.getQuantityString(R.plurals.cal_seconds_left, left, left)
+                ProgressRing(left / READY_WINDOW_S.toFloat(), leftText, color = Amber) {
+                    Text("$left", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                }
+                Text(stringResource(R.string.cal_ready), fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Caption(leftText)
+                OutlinedButton(onClose) { Text(stringResource(R.string.cal_cancel)) }
+            }
+            phase == CalPhase.DONE -> {
+                StatusOrb(WaterState.CLEAR, pulsing = false, size = 96.dp)
+                Text(stringResource(R.string.cal_done), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Button(onClose) { Text(stringResource(R.string.cal_close)) }
+            }
+            else -> {
+                val msg = when {
+                    phase == CalPhase.EXPIRED -> R.string.cal_expired
+                    cal.reason == CalReason.TOO_LOW -> R.string.cal_too_low
+                    cal.reason == CalReason.OUT_OF_RANGE -> R.string.cal_out_of_range
+                    else -> R.string.cal_failed
+                }
+                Text(stringResource(msg), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClose) { Text(stringResource(R.string.cal_close)) }
+                    Button(onStart, enabled = reachable) { Text(stringResource(R.string.cal_try_again)) }
+                }
+            }
         }
     }
 }

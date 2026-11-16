@@ -5,11 +5,15 @@ import android.content.Intent
 import android.provider.Settings
 import android.text.format.DateFormat
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,10 +21,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -28,17 +34,16 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.Date
+import java.util.Locale
 
 private const val KEY_JOIN_HINT_DONE = "join_wifi_hint_done"
 /** The 24 h chart never draws more points than this (one per ~7 minutes of a full day). */
 private const val CHART_MAX_POINTS = 200
-
-fun WaterState.level(): Level = when (this) {
-    WaterState.CLEAR -> Level.WITHIN
-    WaterState.GETTING_CLOUDY -> Level.CAUTION
-    WaterState.CLOUDY -> Level.UNSAFE
-}
 
 /** "5" for whole numbers, else one decimal: "Cloudiness 8.7 (limit is 5)". */
 fun plainNumber(v: Double): String = if (v == Math.rint(v) && kotlin.math.abs(v) < 1e6) v.toLong().toString() else f1(v)
@@ -162,8 +167,7 @@ fun NowScreen(vm: AppViewModel) {
 
 @Composable
 private fun LiveStatus(s: Screen.Live) {
-    val level = s.state.level()
-    StatusOrb(level, pulsing = true)
+    StatusOrb(s.state, pulsing = true)
     Text(stateText(s.state), fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 36.sp,
         textAlign = TextAlign.Center, color = if (s.state == WaterState.CLOUDY) Red else MaterialTheme.colorScheme.onBackground)
     Text(
@@ -171,7 +175,7 @@ private fun LiveStatus(s: Screen.Live) {
         else stringResource(R.string.sub_cloudiness, plainNumber(s.ntu), plainNumber(s.limit)),
         fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center
     )
-    TurbidityBar(s.ntu, s.limit, level, stringResource(R.string.state_clear), stringResource(R.string.word_cloudy),
+    TurbidityBar(s.ntu, s.limit, s.state, stringResource(R.string.state_clear), stringResource(R.string.word_cloudy),
         Modifier.fillMaxWidth())
     LiveLine(s.updatedAtMs)
     if (s.state == WaterState.CLOUDY) {
@@ -248,14 +252,345 @@ private fun JoinWifiHint(screen: Screen) {
     }
 }
 
-// ------------------------------------------------- History / Settings (Task 11 rewrites)
+// ------------------------------------------------------------- formatting
 
-@Composable
-fun HistoryScreen(vm: AppViewModel) {
-    Box(Modifier.fillMaxSize().padding(20.dp)) { Text("Updating…") }
+private const val DAY_MS = 86_400_000L
+private const val CAL_REMINDER_DAYS = 30
+
+private fun localeOf(ctx: Context): Locale = ctx.resources.configuration.locales[0] ?: Locale.getDefault()
+
+private fun fmt(ctx: Context, skeleton: String, ts: Long): String {
+    val locale = localeOf(ctx)
+    return SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale).format(Date(ts))
+}
+
+/** "14:00" or "2:00 PM", following the phone's 24-hour setting. */
+private fun timeOfDay(ctx: Context, ts: Long): String =
+    fmt(ctx, if (DateFormat.is24HourFormat(ctx)) "Hm" else "hm", ts)
+
+private fun localDate(ts: Long): LocalDate = Instant.ofEpochMilli(ts).atZone(ZoneId.systemDefault()).toLocalDate()
+
+/** "Today", "Yesterday", else "Sat 14 Nov". */
+private fun dayLabel(ctx: Context, dayStartMs: Long): String =
+    when (ChronoUnit.DAYS.between(localDate(dayStartMs), LocalDate.now())) {
+        0L -> ctx.getString(R.string.day_today)
+        1L -> ctx.getString(R.string.day_yesterday)
+        else -> fmt(ctx, "EEEdMMM", dayStartMs)
+    }
+
+/** "2 h", "45 min", "1 h 30 min". */
+private fun durationText(ctx: Context, minutes: Int): String {
+    val h = minutes / 60
+    val m = minutes % 60
+    return when {
+        h == 0 -> ctx.getString(R.string.dur_minutes, m)
+        m == 0 -> ctx.getString(R.string.dur_hours, h)
+        else -> ctx.getString(R.string.dur_hours_minutes, h, m)
+    }
+}
+
+/** "Clear all day" / "Got a bit cloudy" / "Cloudy for 2 h (14:00–16:00)". No units. */
+fun daySummaryText(ctx: Context, d: DaySummary): String = when (d.worst) {
+    WaterState.CLEAR -> ctx.getString(R.string.day_clear)
+    WaterState.GETTING_CLOUDY -> ctx.getString(R.string.day_getting_cloudy)
+    WaterState.CLOUDY -> {
+        val first = d.firstCloudyMs ?: d.dayStartMs
+        // Each point is one minute: the cloudy time ends at the end of the last cloudy minute.
+        val last = (d.lastCloudyMs ?: first) + 60_000L
+        ctx.getString(
+            R.string.day_cloudy, durationText(ctx, d.cloudyMinutes.coerceAtLeast(1)),
+            timeOfDay(ctx, first), timeOfDay(ctx, last)
+        )
+    }
+}
+
+/** Clock time with the day in front when not today; a range end drops the day when it matches the start. */
+private fun stamp(ctx: Context, ts: Long, sameDayAs: Long? = null): String {
+    val d = localDate(ts)
+    val dayless = d == LocalDate.now() || (sameDayAs != null && d == localDate(sameDayAs))
+    return if (dayless) timeOfDay(ctx, ts) else fmt(ctx, "dMMM", ts) + " " + timeOfDay(ctx, ts)
+}
+
+private fun alertText(ctx: Context, a: AlertRow): String {
+    val closed = a.closedMs
+    return if (closed == null) ctx.getString(R.string.alert_open, stamp(ctx, a.openedMs))
+    else ctx.getString(R.string.alert_closed, stamp(ctx, a.openedMs), stamp(ctx, closed, sameDayAs = a.openedMs))
+}
+
+/**
+ * Plain-text report for the health office (may use NTU): station, period, daily summaries, cloudy
+ * alerts, last calibration and the not-a-certificate disclaimer. Never says "safe".
+ */
+fun buildReport(
+    ctx: Context, station: String, limit: Double, days: List<DaySummary>, alerts: List<AlertRow>,
+    lastCal: CalEvent?, nowMs: Long,
+): String {
+    fun date(ts: Long) = fmt(ctx, "dMMMyyyy", ts)
+    fun dateTime(ts: Long) = date(ts) + " " + timeOfDay(ctx, ts)
+    val periodStart = days.minOfOrNull { it.dayStartMs } ?: alerts.minOfOrNull { it.openedMs } ?: nowMs
+    val inPeriod = alerts.filter { it.openedMs >= periodStart }.sortedBy { it.openedMs }
+    return buildString {
+        appendLine(ctx.getString(R.string.report_title))
+        appendLine(ctx.getString(R.string.report_made, dateTime(nowMs)))
+        appendLine(ctx.getString(R.string.report_station, station))
+        appendLine(ctx.getString(R.string.report_period, date(periodStart), date(nowMs)))
+        appendLine(ctx.getString(R.string.report_limit, plainNumber(limit)))
+        appendLine()
+        appendLine(ctx.getString(R.string.report_days))
+        if (days.isEmpty()) appendLine("- " + ctx.getString(R.string.report_none))
+        for (d in days.sortedBy { it.dayStartMs }) {
+            appendLine(
+                "- " + ctx.getString(
+                    R.string.report_day, fmt(ctx, "EEEdMMM", d.dayStartMs), daySummaryText(ctx, d), f1(d.avgNtu)
+                )
+            )
+        }
+        appendLine()
+        appendLine(ctx.getString(R.string.report_alerts))
+        if (inPeriod.isEmpty()) appendLine("- " + ctx.getString(R.string.report_none))
+        for (a in inPeriod) {
+            val closed = a.closedMs
+            val line = if (closed == null) ctx.getString(R.string.report_alert_open, dateTime(a.openedMs), f1(a.peakNtu))
+            else ctx.getString(R.string.report_alert_closed, dateTime(a.openedMs), dateTime(closed), f1(a.peakNtu))
+            appendLine("- $line")
+        }
+        appendLine()
+        appendLine(
+            if (lastCal == null) ctx.getString(R.string.report_never_calibrated)
+            else ctx.getString(R.string.report_calibrated, date(lastCal.tsMs))
+        )
+        appendLine()
+        append(ctx.getString(R.string.report_disclaimer))
+    }
+}
+
+// --------------------------------------------------------------- History
+
+private sealed interface HistoryEvent {
+    val ts: Long
+    data class Alert(val a: AlertRow) : HistoryEvent { override val ts: Long get() = a.openedMs }
+    data class Cal(val c: CalEvent) : HistoryEvent { override val ts: Long get() = c.tsMs }
 }
 
 @Composable
+private fun ScreenTitle(text: String) =
+    Text(text, Modifier.fillMaxWidth(), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+
+@Composable
+private fun SectionTitle(text: String) = Text(text, fontWeight = FontWeight.SemiBold)
+
+/** Last 24 hours, one row per day, alerts and calibrations, and the Share report button. */
+@Composable
+fun HistoryScreen(vm: AppViewModel) {
+    val ctx = LocalContext.current
+    val history by vm.history24h.collectAsState()
+    val days by vm.days.collectAsState()
+    val alerts by vm.alerts.collectAsState()
+    val calEvents by vm.calEvents.collectAsState()
+    val limit by vm.currentLimit.collectAsState()
+    val station by vm.station.collectAsState()
+    val lastCal by vm.lastCal.collectAsState()
+    val events = remember(alerts, calEvents) {
+        (alerts.map { HistoryEvent.Alert(it) } + calEvents.map { HistoryEvent.Cal(it) }).sortedByDescending { it.ts }
+    }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        ScreenTitle(stringResource(R.string.tab_history))
+        if (history.isEmpty() && days.isEmpty() && events.isEmpty()) {
+            Panel(Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.history_empty), fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(4.dp))
+                Caption(stringResource(R.string.history_empty_hint))
+            }
+            return@Column
+        }
+
+        DayChart(history, limit)
+
+        if (days.isNotEmpty()) Panel(Modifier.fillMaxWidth()) {
+            SectionTitle(stringResource(R.string.history_days))
+            days.forEachIndexed { i, d ->
+                if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                DayRow(d)
+            }
+        }
+
+        if (events.isNotEmpty()) Panel(Modifier.fillMaxWidth()) {
+            SectionTitle(stringResource(R.string.history_events))
+            events.forEachIndexed { i, e ->
+                if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                when (e) {
+                    is HistoryEvent.Alert -> EventRow(Red, alertText(ctx, e.a), null)
+                    is HistoryEvent.Cal -> EventRow(Blue, stringResource(R.string.cal_event), stamp(ctx, e.c.tsMs))
+                }
+            }
+        }
+
+        val shareTitle = stringResource(R.string.share_report)
+        OutlinedButton(
+            onClick = {
+                val text = buildReport(ctx, station, limit, days, alerts, lastCal, System.currentTimeMillis())
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, ctx.getString(R.string.report_title))
+                    .putExtra(Intent.EXTRA_TEXT, text)
+                try { ctx.startActivity(Intent.createChooser(send, shareTitle)) } catch (_: Exception) {}
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Share, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(shareTitle)
+        }
+    }
+}
+
+@Composable
+private fun DayRow(d: DaySummary) {
+    val ctx = LocalContext.current
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Dot(stateColor(d.worst), 12.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(dayLabel(ctx, d.dayStartMs), fontWeight = FontWeight.SemiBold)
+            Text(daySummaryText(ctx, d), fontSize = 14.sp)
+        }
+        Spacer(Modifier.width(8.dp))
+        Caption(stringResource(R.string.day_average, f1(d.avgNtu)))
+    }
+}
+
+@Composable
+private fun EventRow(color: Color, title: String, sub: String?) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Dot(color, 10.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp)
+            if (sub != null) Caption(sub)
+        }
+    }
+}
+
+// -------------------------------------------------------------- Settings
+
+private val languages = listOf(
+    AppLanguage.SYSTEM to R.string.lang_system,
+    AppLanguage.EN to R.string.lang_en,
+    AppLanguage.FIL to R.string.lang_fil,
+    AppLanguage.CEB to R.string.lang_ceb,
+)
+
+/** The ESP32 keeps at most 40 characters of the station name. */
+private const val STATION_MAX = 40
+
+/** Language, station name, Sensor care and the About-the-colours sheet. */
+@Composable
 fun SettingsScreen(vm: AppViewModel) {
-    Box(Modifier.fillMaxSize().padding(20.dp)) { Text("Updating…") }
+    val language by vm.language.collectAsState()
+    val station by vm.station.collectAsState()
+    val reachable by vm.sensorReachable.collectAsState()
+    var showAbout by rememberSaveable { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        ScreenTitle(stringResource(R.string.tab_settings))
+
+        Panel(Modifier.fillMaxWidth()) {
+            SectionTitle(stringResource(R.string.settings_language))
+            Column(Modifier.selectableGroup()) {
+                languages.forEach { (lang, label) ->
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .selectable(language == lang, role = Role.RadioButton) { vm.setLanguage(lang) },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(language == lang, onClick = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text(stringResource(label))
+                    }
+                }
+            }
+        }
+
+        Panel(Modifier.fillMaxWidth()) {
+            var name by rememberSaveable(station) { mutableStateOf(station) }
+            val trimmed = name.trim()
+            OutlinedTextField(
+                name, { if (it.length <= STATION_MAX) name = it }, Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.settings_station)) }, singleLine = true
+            )
+            Spacer(Modifier.height(6.dp))
+            Caption(stringResource(if (reachable) R.string.station_hint else R.string.station_needs_wifi))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button({ vm.setStation(trimmed) }, enabled = reachable && trimmed.isNotEmpty() && trimmed != station) {
+                    Text(stringResource(R.string.station_save))
+                }
+            }
+        }
+
+        SensorCare(vm, reachable)
+
+        Panel(Modifier.fillMaxWidth().clickable { showAbout = true }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Info, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(12.dp))
+                Text(stringResource(R.string.about_title), Modifier.weight(1f))
+            }
+        }
+    }
+    if (showAbout) AboutSheet { showAbout = false }
+}
+
+/** Last calibrated, 30-day reminder, sensor health line, and the calibration flow. */
+@Composable
+private fun SensorCare(vm: AppViewModel, reachable: Boolean) {
+    val ctx = LocalContext.current
+    val cal by vm.cal.collectAsState()
+    val lastCal by vm.lastCal.collectAsState()
+    val needsCleaning by vm.needsCleaning.collectAsState()
+    val screen by vm.screen.collectAsState()
+    var started by remember { mutableStateOf(false) }
+    val last = lastCal
+    val now = System.currentTimeMillis()
+    Panel(Modifier.fillMaxWidth()) {
+        SectionTitle(stringResource(R.string.sensor_care))
+        Spacer(Modifier.height(8.dp))
+        val ago = last?.let { ChronoUnit.DAYS.between(localDate(it.tsMs), LocalDate.now()).toInt().coerceAtLeast(0) }
+        Text(
+            when (ago) {
+                null -> stringResource(R.string.cal_never)
+                0 -> stringResource(R.string.cal_today)
+                else -> ctx.resources.getQuantityString(R.plurals.cal_days_ago, ago, ago)
+            }
+        )
+        if (last == null || now - last.tsMs > CAL_REMINDER_DAYS * DAY_MS) {
+            Text(stringResource(R.string.cal_reminder), color = amberText(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
+        val health: Pair<Color, String>? = when {
+            screen == Screen.SensorProblem -> Red to stringResource(R.string.sensor_problem)
+            needsCleaning -> Amber to stringResource(R.string.needs_cleaning)
+            screen is Screen.Live -> Blue to stringResource(R.string.sensor_ok)
+            else -> null
+        }
+        if (health != null) {
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Dot(health.first)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    health.second, fontSize = 14.sp,
+                    color = if (health.first == Amber) amberText() else MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+        HorizontalDivider(Modifier.padding(vertical = 14.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        CalibrationSteps(
+            cal = cal, started = started, reachable = reachable,
+            onStart = { started = true; vm.startCalibration() },
+            onClose = { started = false; vm.stopCalibration() },
+        )
+    }
 }

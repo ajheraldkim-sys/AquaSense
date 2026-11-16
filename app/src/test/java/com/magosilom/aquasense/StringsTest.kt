@@ -68,6 +68,41 @@ class StringsTest {
         assertEquals("Last 24 hours", en["last_24h"])
     }
 
+    /** Task 11 copy, verbatim from the brief. */
+    @Test fun historyAndSensorCareCopy() {
+        fun e(k: String) = en[k]?.replace("\\'", "'")
+        assertEquals("Clear all day", e("day_clear"))
+        assertEquals("Got a bit cloudy", e("day_getting_cloudy"))
+        assertEquals("Cloudy for %1\$s (%2\$s–%3\$s)", e("day_cloudy"))
+        assertEquals("Sensor calibrated", e("cal_event"))
+        assertEquals("No readings yet", e("history_empty"))
+        assertEquals("Never calibrated", e("cal_never"))
+        assertEquals("Put the sensor in clean bottled water", e("cal_step1"))
+        assertEquals("Keep the sensor still in clean water", e("cal_settling"))
+        assertEquals("Press the button on the sensor box", e("cal_ready"))
+        assertEquals("Calibrated", e("cal_done"))
+        assertEquals("The water doesn't look clean. Use fresh bottled water.", e("cal_too_low"))
+        assertEquals("Is the sensor in the water?", e("cal_out_of_range"))
+        assertEquals("Took too long — try again", e("cal_expired"))
+        assertEquals("Calibration needs the sensor's Wi-Fi", e("cal_needs_wifi"))
+    }
+
+    /** Residents' History rows say "cloudy", never units; only the share report (report_*) may say NTU. */
+    @Test fun historyRowsHaveNoUnits() {
+        for ((name, t) in listOf("values" to en, "fil" to fil, "ceb" to ceb)) {
+            for ((k, v) in t) {
+                if (!(k.startsWith("day_") || k.startsWith("alert_") || k.startsWith("history_"))) continue
+                assertFalse("$name/$k mentions NTU: $v", v.contains("NTU"))
+            }
+        }
+    }
+
+    /** Cebuano UI no longer carries English-only "Settings" / "Live". */
+    @Test fun cebuanoSettingsAndLiveLocalized() {
+        assertNotEquals("Settings", ceb["tab_settings"])
+        assertFalse(ceb["live_updated"]!!.startsWith("Live"))
+    }
+
     /** Every resource XML in every values* folder, not only strings.xml. */
     @Test fun neverSaysSafe() {
         val banned = listOf("safe", "ligtas", "luwas")

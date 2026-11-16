@@ -31,16 +31,17 @@ private const val LOG_REFRESH_MS = 60_000L
 private const val DAY_MS = 86_400_000L
 private const val KEEP_MS = 35 * DAY_MS
 private const val META_LAST_SEQ = "last_seq"
+private const val KEY_STATION = "station_location"
+private const val DEFAULT_STATION = "Barangay Magosilom Water Station"
 
 /**
  * Automatic live controller. While in the foreground: joins the ESP32 Wi-Fi, polls /readings every
  * second, keeps the ESP32 clock set, imports its minute log, runs the alert engine and notifies.
  * The UI only reads the StateFlows below and calls [setForeground], [startCalibration],
- * [stopCalibration] and [setStation].
+ * [stopCalibration], [setStation] and [setLanguage].
  */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("aquasense", Context.MODE_PRIVATE)
-    private val store = Store(app)
     private val db = HistoryDb(app)
     private val joiner = WifiJoiner(app)
     private val engine = AlertEngine()
@@ -61,7 +62,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val alerts: StateFlow<List<AlertRow>> = _alerts
     private val _needsCleaning = MutableStateFlow(false)
     val needsCleaning: StateFlow<Boolean> = _needsCleaning
-    private val _station = MutableStateFlow(store.location())
+    private val _station = MutableStateFlow(prefs.getString(KEY_STATION, null) ?: DEFAULT_STATION)
     val station: StateFlow<String> = _station
     private val _cal = MutableStateFlow<CalStatus?>(null)
     val cal: StateFlow<CalStatus?> = _cal
@@ -69,6 +70,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val lastCal: StateFlow<CalEvent?> = _lastCal
     private val _wifiSupported = MutableStateFlow(joiner.supported)
     val wifiSupported: StateFlow<Boolean> = _wifiSupported
+    /** Calibration events of the last 30 days, newest first (History rows). */
+    private val _calEvents = MutableStateFlow<List<CalEvent>>(emptyList())
+    val calEvents: StateFlow<List<CalEvent>> = _calEvents
+    /** Latest limit reported by the ESP32 (chart limit line, share report). */
+    private val _limit = MutableStateFlow(DEFAULT_LIMIT)
+    val currentLimit: StateFlow<Double> = _limit
+    /** True while connected to v3 firmware: calibration and renaming the station can work. */
+    private val _sensorReachable = MutableStateFlow(false)
+    val sensorReachable: StateFlow<Boolean> = _sensorReachable
 
     /** In-app language (Settings chooses it); applied at once by [LocalizedApp]. */
     private val languagePrefs = LanguagePrefs(app)
@@ -115,6 +125,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // Never show an hours-old Live screen on resume.
             _screen.value = Screen.Connecting
             calJob?.cancel(); calJob = null
+            _cal.value = null // polling stopped: never show a stale calibration step on resume
+            _sensorReachable.value = false
             joiner.stop()
         }
     }
@@ -164,7 +176,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun updateStation(n: String) {
         if (_station.value == n) return
         _station.value = n
-        store.saveLocation(n)
+        prefs.edit().putString(KEY_STATION, n).apply()
     }
 
     // ------------------------------------------------------------- live loop
@@ -210,6 +222,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (d.importLog) logDue = true
                 if (r.isV3 && syncSupported && now - lastLogMs >= LOG_REFRESH_MS) logDue = true
                 limit = r.limit
+                _limit.value = r.limit
                 r.station?.takeIf { it.isNotBlank() }?.let { updateStation(it) }
 
                 // Sync runs beside the poll loop so /readings keeps its 1 s rhythm (R14).
@@ -237,6 +250,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             wasDisconnected = shouldShowNotConnected(failures, receivedAt, now, startedMs)
+            _sensorReachable.value = !wasDisconnected && reading?.isV3 == true && syncSupported
             _screen.value = displayScreen(reading, receivedAt, lastSeen, failures, startedMs, now)
             delay(if (failures == 0) POLL_MS else backoffMs(failures))
         }
@@ -344,12 +358,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     alerts = db.alerts(now - 30 * DAY_MS),
                     needsCleaning = needsCleaning(db.dailyMinimums(7, z)),
                     lastCal = db.lastCalEvent(),
+                    calEvents = db.calEvents(now - 30 * DAY_MS),
                 )
             }
             _history24h.value = snap.history24h
             _days.value = snap.days
             _alerts.value = snap.alerts
             _needsCleaning.value = snap.needsCleaning
+            _calEvents.value = snap.calEvents
             val dbCal = snap.lastCal
             val memCal = _lastCal.value
             if (dbCal != null && (memCal == null || dbCal.tsMs >= memCal.tsMs)) _lastCal.value = dbCal
@@ -366,6 +382,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val alerts: List<AlertRow>,
         val needsCleaning: Boolean,
         val lastCal: CalEvent?,
+        val calEvents: List<CalEvent>,
     )
 
     override fun onCleared() {

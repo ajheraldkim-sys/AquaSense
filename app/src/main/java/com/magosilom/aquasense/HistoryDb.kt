@@ -90,6 +90,14 @@ class HistoryDb(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "histor
             if (c.moveToFirst()) CalEvent(c.getLong(0), c.getDouble(1)) else null
         }
 
+    /** Calibration events at or after [sinceMs], newest first. */
+    fun calEvents(sinceMs: Long): List<CalEvent> =
+        readableDatabase.rawQuery("SELECT ts, volts FROM cal_events WHERE ts >= ? ORDER BY ts DESC", arrayOf(sinceMs.toString())).use { c ->
+            val out = ArrayList<CalEvent>()
+            while (c.moveToNext()) out.add(CalEvent(c.getLong(0), c.getDouble(1)))
+            out
+        }
+
     fun openAlert(atMs: Long, ntu: Double): Long {
         val cv = ContentValues().apply {
             put("opened", atMs); putNull("closed"); put("peak", ntu)

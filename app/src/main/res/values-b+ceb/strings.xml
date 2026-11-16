@@ -7,7 +7,7 @@
 
     <string name="tab_now">Karon</string>
     <string name="tab_history">Kaniadto</string>
-    <string name="tab_settings">Settings</string>
+    <string name="tab_settings">Mga Setting</string>
 
     <string name="state_clear">Tin-aw</string>
     <string name="state_getting_cloudy">Nagkalubog na</string>
@@ -16,7 +16,7 @@
     <string name="sub_cloudiness">Kalubog %1$s (hangtod %2$s lang dapat)</string>
     <string name="sub_check_soon">Tan-awa pag-usab unya</string>
     <string name="tip_cloudy">Gamita sa usa ang tinipigan o gipabukalan nga tubig.</string>
-    <string name="live_updated">Live · gi-update %1$s</string>
+    <string name="live_updated">Direkta · gi-update %1$s</string>
     <string name="time_just_now">karon lang</string>
     <plurals name="time_seconds_ago">
         <item quantity="one">%d ka segundo ang milabay</item>
@@ -54,4 +54,76 @@
     <string name="about_grey_title">Walay sukod</string>
     <string name="about_grey">Dili konektado, o dili mogana ang sensor.</string>
     <string name="about_disclaimer">Ang AquaSense nagsukod lang kung unsa ka lubog ang tubig. Bisan tin-aw ang tubig, mahimo gihapon kining adunay mikrobyo o kemikal nga dili makita sa sensor. Ang lab test o ang inyong RHU (Rural Health Unit) lang ang makasulti kung mahimo na bang imnon ang tubig.</string>
+
+    <!-- History -->
+    <string name="history_empty">Wala pay sukod</string>
+    <string name="history_empty_hint">Mogawas diri ang mga sukod human maduol ang imong phone sa estasyon sa tubig.</string>
+    <string name="history_days">Miaging 7 ka adlaw</string>
+    <string name="history_events">Mga pahibalo ug pag-atiman sa sensor</string>
+    <string name="day_today">Karong adlawa</string>
+    <string name="day_yesterday">Gahapon</string>
+    <string name="day_clear">Tin-aw tibuok adlaw</string>
+    <string name="day_getting_cloudy">Medyo milubog</string>
+    <string name="day_cloudy">Lubog sulod sa %1$s (%2$s–%3$s)</string>
+    <string name="day_average">Kasagaran %1$s</string>
+    <string name="dur_hours">%1$d ka oras</string>
+    <string name="dur_minutes">%1$d min</string>
+    <string name="dur_hours_minutes">%1$d ka oras %2$d min</string>
+    <string name="alert_closed">Lubog %1$s – %2$s</string>
+    <string name="alert_open">Lubog sukad %1$s · lubog pa gihapon</string>
+    <string name="cal_event">Na-calibrate ang sensor</string>
+    <string name="share_report">Ipakigbahin ang report</string>
+    <!-- Share report (for the health office; may use NTU) -->
+    <string name="report_title">Report sa tubig gikan sa AquaSense</string>
+    <string name="report_made">Gihimo niadtong %1$s</string>
+    <string name="report_station">Estasyon: %1$s</string>
+    <string name="report_period">Panahon: %1$s hangtod %2$s</string>
+    <string name="report_limit">Limitasyon sa kalubog: %1$s NTU</string>
+    <string name="report_days">Summary matag adlaw (turbidity sa NTU):</string>
+    <string name="report_day">%1$s: %2$s, kasagaran %3$s NTU</string>
+    <string name="report_alerts">Mga pahibalo sa kalubog:</string>
+    <string name="report_alert_closed">%1$s hangtod %2$s, pinakataas %3$s NTU</string>
+    <string name="report_alert_open">sukad %1$s (lubog pa gihapon), pinakataas %2$s NTU</string>
+    <string name="report_none">Wala</string>
+    <string name="report_calibrated">Katapusang calibration sa sensor: %1$s</string>
+    <string name="report_never_calibrated">Katapusang calibration sa sensor: wala pa</string>
+    <string name="report_disclaimer">Kini nga report nagpakita lang kung unsa ka lubog (turbidity) ang tubig. Dili kini pamatuod nga mahimo nang imnon ang tubig. Ang lab test lang ang makapamatuod niini.</string>
+    <!-- Settings -->
+    <string name="settings_language">Pinulongan</string>
+    <string name="lang_system">Sama sa phone</string>
+    <string name="lang_en">English</string>
+    <string name="lang_fil">Filipino</string>
+    <string name="lang_ceb">Bisaya</string>
+    <string name="settings_station">Ngalan sa estasyon</string>
+    <string name="station_hint">Kini nga ngalan ang makita sa matag phone.</string>
+    <string name="station_save">I-save</string>
+    <string name="station_needs_wifi">Aron usbon ang ngalan, konektar sa Wi-Fi sa sensor.</string>
+    <string name="sensor_care">Pag-atiman sa sensor</string>
+    <string name="cal_today">Na-calibrate karong adlawa</string>
+    <plurals name="cal_days_ago">
+        <item quantity="one">Na-calibrate %d ka adlaw na ang milabay</item>
+        <item quantity="other">Na-calibrate %d ka adlaw na ang milabay</item>
+    </plurals>
+    <string name="cal_never">Wala pa ma-calibrate</string>
+    <string name="cal_reminder">I-calibrate ang sensor matag 30 ka adlaw. Panahon na karon.</string>
+    <string name="sensor_ok">Mogana ang sensor</string>
+    <string name="cal_step1">Ibutang ang sensor sa limpyo nga bottled water</string>
+    <string name="cal_start">Sugdi</string>
+    <string name="cal_starting">Nagsugod…</string>
+    <string name="cal_settling">Ayaw lihoka ang sensor sa limpyo nga tubig</string>
+    <string name="cal_progress">Wala molihok sulod sa %1$d sa 60 ka segundo</string>
+    <string name="cal_ready">Pindota ang button sa kahon sa sensor</string>
+    <plurals name="cal_seconds_left">
+        <item quantity="one">%d ka segundo na lang</item>
+        <item quantity="other">%d ka segundo na lang</item>
+    </plurals>
+    <string name="cal_done">Na-calibrate na</string>
+    <string name="cal_too_low">Morag dili limpyo ang tubig. Gamit ug bag-ong bottled water.</string>
+    <string name="cal_out_of_range">Naa ba sa tubig ang sensor?</string>
+    <string name="cal_failed">Wala molampos. Sulayi pag-usab.</string>
+    <string name="cal_expired">Dugay kaayo — sulayi pag-usab</string>
+    <string name="cal_cancel">Kanselahon</string>
+    <string name="cal_close">Isira</string>
+    <string name="cal_try_again">Sulayi pag-usab</string>
+    <string name="cal_needs_wifi">Kinahanglan ang Wi-Fi sa sensor aron ma-calibrate</string>
 </resources>

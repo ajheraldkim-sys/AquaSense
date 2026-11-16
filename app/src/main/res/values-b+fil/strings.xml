@@ -54,4 +54,76 @@
     <string name="about_grey_title">Walang sukat</string>
     <string name="about_grey">Hindi konektado, o hindi gumagana ang sensor.</string>
     <string name="about_disclaimer">Labo lang ng tubig ang sinusukat ng AquaSense. Kahit malinaw ang tubig, puwede pa rin itong may mikrobyo o kemikal na hindi nakikita ng sensor. Lab test o ang inyong RHU (Rural Health Unit) lang ang makapagsasabi kung puwede nang inumin ang tubig.</string>
+
+    <!-- History -->
+    <string name="history_empty">Wala pang sukat</string>
+    <string name="history_empty_hint">Lalabas dito ang mga sukat kapag nakalapit na ang phone mo sa istasyon ng tubig.</string>
+    <string name="history_days">Huling 7 araw</string>
+    <string name="history_events">Mga babala at pag-aalaga sa sensor</string>
+    <string name="day_today">Ngayong araw</string>
+    <string name="day_yesterday">Kahapon</string>
+    <string name="day_clear">Malinaw buong araw</string>
+    <string name="day_getting_cloudy">Medyo lumabo</string>
+    <string name="day_cloudy">Malabo nang %1$s (%2$s–%3$s)</string>
+    <string name="day_average">Karaniwan %1$s</string>
+    <string name="dur_hours">%1$d oras</string>
+    <string name="dur_minutes">%1$d min</string>
+    <string name="dur_hours_minutes">%1$d oras %2$d min</string>
+    <string name="alert_closed">Malabo %1$s – %2$s</string>
+    <string name="alert_open">Malabo mula %1$s · malabo pa rin</string>
+    <string name="cal_event">Na-calibrate ang sensor</string>
+    <string name="share_report">Ibahagi ang ulat</string>
+    <!-- Share report (for the health office; may use NTU) -->
+    <string name="report_title">Ulat ng tubig mula sa AquaSense</string>
+    <string name="report_made">Ginawa noong %1$s</string>
+    <string name="report_station">Istasyon: %1$s</string>
+    <string name="report_period">Panahon: %1$s hanggang %2$s</string>
+    <string name="report_limit">Hangganan ng labo: %1$s NTU</string>
+    <string name="report_days">Buod bawat araw (turbidity sa NTU):</string>
+    <string name="report_day">%1$s: %2$s, karaniwan %3$s NTU</string>
+    <string name="report_alerts">Mga babala sa labo:</string>
+    <string name="report_alert_closed">%1$s hanggang %2$s, pinakamataas %3$s NTU</string>
+    <string name="report_alert_open">mula %1$s (malabo pa rin), pinakamataas %2$s NTU</string>
+    <string name="report_none">Wala</string>
+    <string name="report_calibrated">Huling calibration ng sensor: %1$s</string>
+    <string name="report_never_calibrated">Huling calibration ng sensor: wala pa</string>
+    <string name="report_disclaimer">Ipinapakita lang ng ulat na ito kung gaano kalabo (turbidity) ang tubig. Hindi ito katibayan na puwedeng inumin ang tubig. Lab test lang ang makapagpapatunay nito.</string>
+    <!-- Settings -->
+    <string name="settings_language">Wika</string>
+    <string name="lang_system">Kapareho ng phone</string>
+    <string name="lang_en">English</string>
+    <string name="lang_fil">Filipino</string>
+    <string name="lang_ceb">Bisaya</string>
+    <string name="settings_station">Pangalan ng istasyon</string>
+    <string name="station_hint">Ito ang pangalang makikita sa bawat phone.</string>
+    <string name="station_save">I-save</string>
+    <string name="station_needs_wifi">Para palitan ang pangalan, kumonekta sa Wi-Fi ng sensor.</string>
+    <string name="sensor_care">Pag-aalaga sa sensor</string>
+    <string name="cal_today">Na-calibrate ngayong araw</string>
+    <plurals name="cal_days_ago">
+        <item quantity="one">Na-calibrate %d araw na ang nakalipas</item>
+        <item quantity="other">Na-calibrate %d araw na ang nakalipas</item>
+    </plurals>
+    <string name="cal_never">Hindi pa na-calibrate</string>
+    <string name="cal_reminder">I-calibrate ang sensor tuwing 30 araw. Oras na ngayon.</string>
+    <string name="sensor_ok">Gumagana ang sensor</string>
+    <string name="cal_step1">Ilagay ang sensor sa malinis na bottled water</string>
+    <string name="cal_start">Simulan</string>
+    <string name="cal_starting">Sinisimulan…</string>
+    <string name="cal_settling">Huwag galawin ang sensor sa malinis na tubig</string>
+    <string name="cal_progress">Hindi gumalaw nang %1$d sa 60 segundo</string>
+    <string name="cal_ready">Pindutin ang button sa kahon ng sensor</string>
+    <plurals name="cal_seconds_left">
+        <item quantity="one">%d segundo pa</item>
+        <item quantity="other">%d segundo pa</item>
+    </plurals>
+    <string name="cal_done">Na-calibrate na</string>
+    <string name="cal_too_low">Mukhang hindi malinis ang tubig. Gumamit ng bagong bottled water.</string>
+    <string name="cal_out_of_range">Nasa tubig ba ang sensor?</string>
+    <string name="cal_failed">Hindi gumana. Subukan ulit.</string>
+    <string name="cal_expired">Natagalan — subukan ulit</string>
+    <string name="cal_cancel">Kanselahin</string>
+    <string name="cal_close">Isara</string>
+    <string name="cal_try_again">Subukan ulit</string>
+    <string name="cal_needs_wifi">Kailangan ng Wi-Fi ng sensor para mag-calibrate</string>
 </resources>

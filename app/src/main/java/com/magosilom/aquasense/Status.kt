@@ -1,12 +1,23 @@
 package com.magosilom.aquasense
 
+import java.util.Locale
+
 enum class WaterState { CLEAR, GETTING_CLOUDY, CLOUDY }
+
+/** Above this fraction of the limit the water is "Getting cloudy". */
+const val NEAR_FRACTION = 0.8
 
 fun waterState(ntu: Double, limit: Double): WaterState = when {
     ntu > limit -> WaterState.CLOUDY
-    ntu > 0.8 * limit -> WaterState.GETTING_CLOUDY
+    ntu > NEAR_FRACTION * limit -> WaterState.GETTING_CLOUDY
     else -> WaterState.CLEAR
 }
+
+/** Connection state of the ESP32 link. */
+enum class Link { IDLE, CONNECTING, ONLINE, OFFLINE }
+
+/** One decimal, always with a dot (numbers on screen and in the share report). */
+fun f1(v: Double): String = String.format(Locale.US, "%.1f", v)
 
 sealed interface Screen {
     object Connecting : Screen

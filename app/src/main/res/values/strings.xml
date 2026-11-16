@@ -57,4 +57,76 @@
     <string name="about_grey_title">No reading</string>
     <string name="about_grey">Not connected, or the sensor is not working.</string>
     <string name="about_disclaimer">AquaSense only checks how cloudy the water is. Clear water can still have germs or chemicals that the sensor cannot detect. Only a lab test or your RHU (Rural Health Unit) can confirm the water is fit to drink.</string>
+
+    <!-- History -->
+    <string name="history_empty">No readings yet</string>
+    <string name="history_empty_hint">Readings show up here after your phone has been near the water station.</string>
+    <string name="history_days">Last 7 days</string>
+    <string name="history_events">Alerts and sensor care</string>
+    <string name="day_today">Today</string>
+    <string name="day_yesterday">Yesterday</string>
+    <string name="day_clear">Clear all day</string>
+    <string name="day_getting_cloudy">Got a bit cloudy</string>
+    <string name="day_cloudy">Cloudy for %1$s (%2$s–%3$s)</string>
+    <string name="day_average">Average %1$s</string>
+    <string name="dur_hours">%1$d h</string>
+    <string name="dur_minutes">%1$d min</string>
+    <string name="dur_hours_minutes">%1$d h %2$d min</string>
+    <string name="alert_closed">Cloudy %1$s – %2$s</string>
+    <string name="alert_open">Cloudy since %1$s · still cloudy</string>
+    <string name="cal_event">Sensor calibrated</string>
+    <string name="share_report">Share report</string>
+    <!-- Share report (for the health office; may use NTU) -->
+    <string name="report_title">AquaSense water report</string>
+    <string name="report_made">Made on %1$s</string>
+    <string name="report_station">Station: %1$s</string>
+    <string name="report_period">Period: %1$s to %2$s</string>
+    <string name="report_limit">Cloudiness limit: %1$s NTU</string>
+    <string name="report_days">Daily summary (turbidity in NTU):</string>
+    <string name="report_day">%1$s: %2$s, average %3$s NTU</string>
+    <string name="report_alerts">Cloudy alerts:</string>
+    <string name="report_alert_closed">%1$s to %2$s, highest %3$s NTU</string>
+    <string name="report_alert_open">since %1$s (still cloudy), highest %2$s NTU</string>
+    <string name="report_none">None</string>
+    <string name="report_calibrated">Sensor last calibrated: %1$s</string>
+    <string name="report_never_calibrated">Sensor last calibrated: never</string>
+    <string name="report_disclaimer">This report only shows how cloudy (turbid) the water was. It is not a certificate that the water is fit to drink. Only a lab test can confirm that.</string>
+    <!-- Settings -->
+    <string name="settings_language">Language</string>
+    <string name="lang_system">Same as phone</string>
+    <string name="lang_en">English</string>
+    <string name="lang_fil">Filipino</string>
+    <string name="lang_ceb">Bisaya</string>
+    <string name="settings_station">Station name</string>
+    <string name="station_hint">Every phone shows this name.</string>
+    <string name="station_save">Save</string>
+    <string name="station_needs_wifi">To change the name, connect to the sensor\'s Wi-Fi.</string>
+    <string name="sensor_care">Sensor care</string>
+    <string name="cal_today">Calibrated today</string>
+    <plurals name="cal_days_ago">
+        <item quantity="one">Calibrated %d day ago</item>
+        <item quantity="other">Calibrated %d days ago</item>
+    </plurals>
+    <string name="cal_never">Never calibrated</string>
+    <string name="cal_reminder">Calibrate the sensor every 30 days. It\'s time now.</string>
+    <string name="sensor_ok">Sensor is working</string>
+    <string name="cal_step1">Put the sensor in clean bottled water</string>
+    <string name="cal_start">Start</string>
+    <string name="cal_starting">Starting…</string>
+    <string name="cal_settling">Keep the sensor still in clean water</string>
+    <string name="cal_progress">Steady for %1$d of 60 seconds</string>
+    <string name="cal_ready">Press the button on the sensor box</string>
+    <plurals name="cal_seconds_left">
+        <item quantity="one">%d second left</item>
+        <item quantity="other">%d seconds left</item>
+    </plurals>
+    <string name="cal_done">Calibrated</string>
+    <string name="cal_too_low">The water doesn\'t look clean. Use fresh bottled water.</string>
+    <string name="cal_out_of_range">Is the sensor in the water?</string>
+    <string name="cal_failed">That didn\'t work. Try again.</string>
+    <string name="cal_expired">Took too long — try again</string>
+    <string name="cal_cancel">Cancel</string>
+    <string name="cal_close">Close</string>
+    <string name="cal_try_again">Try again</string>
+    <string name="cal_needs_wifi">Calibration needs the sensor\'s Wi-Fi</string>
 </resources>
