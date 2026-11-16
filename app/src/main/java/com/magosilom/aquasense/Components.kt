@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -55,7 +56,7 @@ fun Dot(color: Color, size: Dp = 10.dp) = Box(Modifier.size(size).background(col
  * Pulses gently while live data is flowing.
  */
 @Composable
-fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp) {
+fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp, greyMark: String = "?") {
     val color by animateColorAsState(levelColor(level), tween(600), label = "orb")
     val t = rememberInfiniteTransition(label = "pulse")
     val pulse by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "p")
@@ -69,18 +70,22 @@ fun StatusOrb(level: Level?, pulsing: Boolean, size: Dp = 168.dp) {
         }
         val icon = levelIcon(level)
         if (icon != null) Icon(icon, null, Modifier.size(size * 0.26f), tint = Color.White)
-        else Text("?", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+        else Text(greyMark, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
     }
 }
 
 // --------------------------------------------------------------- turbidity bar
 
 /**
- * Big number + a horizontal scale: blue zone below the limit, amber close to it, red above.
- * The marker shows where the current value sits.
+ * The value + a horizontal Clear → Cloudy scale: blue zone below the limit, amber close to it, red above.
+ * The marker shows where the current value sits. No units or technical words: [clearLabel] / [cloudyLabel]
+ * are the localized end labels.
  */
 @Composable
-fun TurbidityBar(value: Double?, limit: Double, level: Level?, modifier: Modifier = Modifier) {
+fun TurbidityBar(
+    value: Double?, limit: Double, level: Level?, clearLabel: String, cloudyLabel: String,
+    modifier: Modifier = Modifier,
+) {
     val scaleMax = maxOf(limit * 2, (value ?: 0.0) * 1.15)
     val frac by animateFloatAsState(
         if (value == null) 0f else (value / scaleMax).toFloat().coerceIn(0f, 1f), tween(700), label = "t"
@@ -88,18 +93,8 @@ fun TurbidityBar(value: Double?, limit: Double, level: Level?, modifier: Modifie
     val track = MaterialTheme.colorScheme.surfaceVariant
     val marker = levelColor(level)
     Panel(modifier) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(value?.let { if (it < 100) f1(it) else it.toInt().toString() } ?: "—",
-                fontSize = 44.sp, fontWeight = FontWeight.Bold, lineHeight = 44.sp)
-            Spacer(Modifier.width(6.dp))
-            Text("NTU", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 6.dp))
-            Spacer(Modifier.weight(1f))
-            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 4.dp)) {
-                Text("Turbidity", fontWeight = FontWeight.SemiBold)
-                Caption("limit ${f1(limit)} NTU")
-            }
-        }
+        Text(value?.let { if (it < 100) f1(it) else it.toInt().toString() } ?: "—",
+            fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 30.sp, color = marker)
         Spacer(Modifier.height(16.dp))
         Canvas(Modifier.fillMaxWidth().height(28.dp)) {
             val h = 12.dp.toPx(); val y = (size.height - h) / 2
@@ -121,7 +116,7 @@ fun TurbidityBar(value: Double?, limit: Double, level: Level?, modifier: Modifie
             }
         }
         Row(Modifier.fillMaxWidth()) {
-            Caption("Clear", color = Grey); Spacer(Modifier.weight(1f)); Caption("Cloudy", color = Grey)
+            Caption(clearLabel, color = Grey); Spacer(Modifier.weight(1f)); Caption(cloudyLabel, color = Grey)
         }
     }
 }
@@ -133,12 +128,15 @@ fun TurbidityBar(value: Double?, limit: Double, level: Level?, modifier: Modifie
  * Points outside the band are drawn in red.
  */
 @Composable
-fun TrendChart(values: List<Double>, lo: Double?, hi: Double?, modifier: Modifier = Modifier, height: Dp = 120.dp) {
+fun TrendChart(
+    values: List<Double>, lo: Double?, hi: Double?, emptyText: String,
+    modifier: Modifier = Modifier, height: Dp = 120.dp,
+) {
     val line = MaterialTheme.colorScheme.primary
     val grid = MaterialTheme.colorScheme.outlineVariant
     if (values.size < 2) {
         Box(modifier.fillMaxWidth().height(height), contentAlignment = Alignment.Center) {
-            Caption("Measure a few times to see a trend")
+            Caption(emptyText)
         }
         return
     }
@@ -168,18 +166,20 @@ fun TrendChart(values: List<Double>, lo: Double?, hi: Double?, modifier: Modifie
     }
 }
 
-/** Short "i"-sheet with the safety explanation, instead of repeating it on every screen. */
+/** Short "i"-sheet: what the colours mean + the limits of a cloudiness sensor. Never says "safe". */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutSheet(onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("What the colours mean", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            LegendRow(Blue, "Within limits", "Turbidity is below the limit you set.")
-            LegendRow(Amber, "Check again", "Close to the limit. Measure again soon.")
-            LegendRow(Red, "Don't drink", "Turbidity is above the limit: the water is cloudy.")
+            Text(stringResource(R.string.about_title), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            LegendRow(Blue, stringResource(R.string.state_clear), stringResource(R.string.about_clear))
+            LegendRow(Amber, stringResource(R.string.state_getting_cloudy), stringResource(R.string.about_getting_cloudy))
+            LegendRow(Red, stringResource(R.string.state_cloudy), stringResource(R.string.about_cloudy))
+            LegendRow(Grey, stringResource(R.string.about_grey_title), stringResource(R.string.about_grey))
             HorizontalDivider()
-            Text(DISCLAIMER, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
+            Text(stringResource(R.string.about_disclaimer), fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
         }
     }
 }

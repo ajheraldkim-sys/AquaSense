@@ -3,6 +3,7 @@ package com.magosilom.aquasense
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import androidx.annotation.StringRes
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,7 +19,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -80,16 +83,24 @@ fun AquaTheme(content: @Composable () -> Unit) {
 
 // --------------------------------------------------------------------- shell
 
-private data class Tab(val route: String, val title: String, val icon: ImageVector)
+private data class Tab(val route: String, @StringRes val title: Int, val icon: ImageVector)
 
 private val tabs = listOf(
-    Tab("now", "Now", Icons.Default.Home),
-    Tab("history", "History", Icons.AutoMirrored.Filled.List),
-    Tab("settings", "Settings", Icons.Default.Settings)
+    Tab("now", R.string.tab_now, Icons.Default.Home),
+    Tab("history", R.string.tab_history, Icons.AutoMirrored.Filled.List),
+    Tab("settings", R.string.tab_settings, Icons.Default.Settings)
 )
 
+/** Applies the in-app language (switches at once, no restart) around the whole UI. */
 @Composable
 fun AquaApp(vm: AppViewModel = viewModel()) {
+    val choice by vm.language.collectAsState()
+    LocalConfiguration.current // recompose when the phone's own language changes
+    LocalizedApp(resolveLanguage(choice, systemLanguageTag())) { AquaShell(vm) }
+}
+
+@Composable
+private fun AquaShell(vm: AppViewModel) {
     val nav = rememberNavController()
     val route = nav.currentBackStackEntryAsState().value?.destination?.route ?: "now"
     val snack = remember { SnackbarHostState() }
@@ -124,14 +135,14 @@ fun AquaApp(vm: AppViewModel = viewModel()) {
                                 Icon(t.icon, null)
                             }
                         },
-                        label = { Text(t.title) }
+                        label = { Text(stringResource(t.title)) }
                     )
                 }
             }
         }
     ) { pad ->
         NavHost(nav, "now", Modifier.padding(pad)) {
-            composable("now") { NowScreen(vm) { go("history") } }
+            composable("now") { NowScreen(vm) }
             composable("history") { HistoryScreen(vm) }
             composable("settings") { SettingsScreen(vm) }
         }

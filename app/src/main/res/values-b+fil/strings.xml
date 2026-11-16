@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Needs native-speaker review -->
+<resources>
+    <string name="notif_channel_alerts">Mga babala sa tubig</string>
+    <string name="notif_cloudy_title">Malabo ang tubig</string>
+    <string name="notif_cloudy_text">Huwag munang inumin. Gumamit ng nakaimbak o pinakuluang tubig.</string>
+
+    <string name="tab_now">Ngayon</string>
+    <string name="tab_history">Nakaraan</string>
+    <string name="tab_settings">Settings</string>
+
+    <string name="state_clear">Malinaw</string>
+    <string name="state_getting_cloudy">Lumalabo na</string>
+    <string name="state_cloudy">Malabo — huwag inumin</string>
+    <string name="word_cloudy">Malabo</string>
+    <string name="sub_cloudiness">Labo %1$s (hanggang %2$s lang dapat)</string>
+    <string name="sub_check_soon">Tingnan ulit mamaya</string>
+    <string name="tip_cloudy">Gumamit muna ng nakaimbak o pinakuluang tubig.</string>
+    <string name="live_updated">Live · na-update %1$s</string>
+    <string name="time_just_now">ngayon lang</string>
+    <plurals name="time_seconds_ago">
+        <item quantity="one">%d segundo ang nakalipas</item>
+        <item quantity="other">%d segundo ang nakalipas</item>
+    </plurals>
+    <plurals name="time_minutes_ago">
+        <item quantity="one">%d minuto ang nakalipas</item>
+        <item quantity="other">%d minuto ang nakalipas</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="one">%d oras ang nakalipas</item>
+        <item quantity="other">%d oras ang nakalipas</item>
+    </plurals>
+    <string name="connecting">Kumokonekta sa sensor ng tubig…</string>
+    <string name="not_connected">Hindi konektado</string>
+    <string name="go_near">Lumapit sa istasyon ng tubig.</string>
+    <string name="last_seen">Huling nakita %1$s: %2$s</string>
+    <string name="sensor_problem">Hindi gumagana ang sensor</string>
+    <string name="tell_caretaker">Sabihan ang bantay ng istasyon ng tubig.</string>
+    <string name="needs_cleaning">Kailangang linisin ang sensor</string>
+    <string name="last_24h">Huling 24 na oras</string>
+    <string name="chart_empty">Kulang pa ang mga sukat</string>
+    <string name="chart_start">24 oras ang nakalipas</string>
+    <string name="chart_now">Ngayon</string>
+
+    <string name="join_wifi">Kumonekta sa %1$s na Wi-Fi</string>
+    <string name="join_wifi_how">Buksan ang Wi-Fi settings ng phone mo at piliin ito. Password: %1$s</string>
+    <string name="open_wifi_settings">Buksan ang Wi-Fi settings</string>
+    <string name="got_it">Sige</string>
+
+    <string name="about_title">Ano ang ibig sabihin ng mga kulay</string>
+    <string name="about_clear">Malinaw ang tubig. Mababa ito sa hangganan.</string>
+    <string name="about_getting_cloudy">Malapit na sa hangganan. Tingnan ulit mamaya.</string>
+    <string name="about_cloudy">Lampas sa hangganan. Gumamit ng nakaimbak o pinakuluang tubig.</string>
+    <string name="about_grey_title">Walang sukat</string>
+    <string name="about_grey">Hindi konektado, o hindi gumagana ang sensor.</string>
+    <string name="about_disclaimer">Labo lang ng tubig ang sinusukat ng AquaSense. Kahit malinaw ang tubig, puwede pa rin itong may mikrobyo o kemikal na hindi nakikita ng sensor. Lab test o ang inyong RHU (Rural Health Unit) lang ang makapagsasabi kung puwede nang inumin ang tubig.</string>
+</resources>

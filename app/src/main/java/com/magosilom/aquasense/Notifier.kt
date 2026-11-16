@@ -19,13 +19,14 @@ object Notifier {
 
     /** Localized title/text from string resources; one [tag] so repeat alerts replace instead of stacking. */
     fun alert(ctx: Context, @StringRes titleRes: Int, @StringRes textRes: Int, tag: String = TAG_CLOUDY) {
-        val title = ctx.getString(titleRes)
-        val text = ctx.getString(textRes)
+        val lc = localizedContext(ctx) // the in-app language, not only the phone's
+        val title = lc.getString(titleRes)
+        val text = lc.getString(textRes)
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(NotificationChannel(CH, ctx.getString(R.string.notif_channel_alerts), NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(CH, lc.getString(R.string.notif_channel_alerts), NotificationManager.IMPORTANCE_HIGH))
         val open = PendingIntent.getActivity(
             ctx, 0,
             Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),

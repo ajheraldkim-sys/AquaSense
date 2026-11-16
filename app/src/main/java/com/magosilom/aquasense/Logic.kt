@@ -45,12 +45,6 @@ fun ago(ts: Long, now: Long = System.currentTimeMillis()): String {
     }
 }
 
-const val DISCLAIMER =
-    "AquaSense compares the water's turbidity (cloudiness) with the limit set in this app. It is " +
-        "not a test of drinking-water safety: clear water can still contain germs, chemicals or " +
-        "heavy metals. Only laboratory testing and the local health authority (RHU / Municipal " +
-        "Health Office) can confirm that water is safe to drink."
-
 /** Turbidity above 80 % of the limit is "Check again"; above the limit is "Don't drink". */
 const val NEAR_FRACTION = 0.8
 

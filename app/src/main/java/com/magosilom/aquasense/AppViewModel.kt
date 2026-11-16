@@ -70,6 +70,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _wifiSupported = MutableStateFlow(joiner.supported)
     val wifiSupported: StateFlow<Boolean> = _wifiSupported
 
+    /** In-app language (Settings chooses it); applied at once by [LocalizedApp]. */
+    private val languagePrefs = LanguagePrefs(app)
+    val language: StateFlow<AppLanguage> = languagePrefs.language
+    fun setLanguage(lang: AppLanguage) = languagePrefs.set(lang)
+
     /** Latest limit seen from the ESP32 (used for summaries and imported points). */
     @Volatile private var limit = DEFAULT_LIMIT
     private var lastSeen: Point? = null

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Needs native-speaker review -->
+<resources>
+    <string name="notif_channel_alerts">Mga pahibalo sa tubig</string>
+    <string name="notif_cloudy_title">Labog ang tubig</string>
+    <string name="notif_cloudy_text">Ayaw sa usa imna. Gamita ang tinipigan o gipabukalan nga tubig.</string>
+
+    <string name="tab_now">Karon</string>
+    <string name="tab_history">Kaniadto</string>
+    <string name="tab_settings">Settings</string>
+
+    <string name="state_clear">Klaro</string>
+    <string name="state_getting_cloudy">Nagkalabog na</string>
+    <string name="state_cloudy">Labog — ayaw imna</string>
+    <string name="word_cloudy">Labog</string>
+    <string name="sub_cloudiness">Kalabog %1$s (hangtod %2$s lang dapat)</string>
+    <string name="sub_check_soon">Tan-awa pag-usab unya</string>
+    <string name="tip_cloudy">Gamita sa usa ang tinipigan o gipabukalan nga tubig.</string>
+    <string name="live_updated">Live · gi-update %1$s</string>
+    <string name="time_just_now">karon lang</string>
+    <plurals name="time_seconds_ago">
+        <item quantity="one">%d ka segundo ang milabay</item>
+        <item quantity="other">%d ka segundo ang milabay</item>
+    </plurals>
+    <plurals name="time_minutes_ago">
+        <item quantity="one">%d ka minuto ang milabay</item>
+        <item quantity="other">%d ka minuto ang milabay</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="one">%d ka oras ang milabay</item>
+        <item quantity="other">%d ka oras ang milabay</item>
+    </plurals>
+    <string name="connecting">Nagkonektar sa sensor sa tubig…</string>
+    <string name="not_connected">Dili konektado</string>
+    <string name="go_near">Duol sa estasyon sa tubig.</string>
+    <string name="last_seen">Katapusang nakita %1$s: %2$s</string>
+    <string name="sensor_problem">Dili mogana ang sensor</string>
+    <string name="tell_caretaker">Sultihi ang tig-atiman sa estasyon sa tubig.</string>
+    <string name="needs_cleaning">Kinahanglang limpyohan ang sensor</string>
+    <string name="last_24h">Miaging 24 ka oras</string>
+    <string name="chart_empty">Kulang pa ang mga sukod</string>
+    <string name="chart_start">24 ka oras ang milabay</string>
+    <string name="chart_now">Karon</string>
+
+    <string name="join_wifi">Konektar sa %1$s nga Wi-Fi</string>
+    <string name="join_wifi_how">Ablihi ang Wi-Fi settings sa imong phone ug pilia kini. Password: %1$s</string>
+    <string name="open_wifi_settings">Ablihi ang Wi-Fi settings</string>
+    <string name="got_it">Sige</string>
+
+    <string name="about_title">Unsay pasabot sa mga kolor</string>
+    <string name="about_clear">Klaro ang tubig. Ubos kini sa limitasyon.</string>
+    <string name="about_getting_cloudy">Hapit na sa limitasyon. Tan-awa pag-usab unya.</string>
+    <string name="about_cloudy">Lapas sa limitasyon. Gamita ang tinipigan o gipabukalan nga tubig.</string>
+    <string name="about_grey_title">Walay sukod</string>
+    <string name="about_grey">Dili konektado, o dili mogana ang sensor.</string>
+    <string name="about_disclaimer">Ang AquaSense nagsukod lang kung unsa ka labog ang tubig. Bisan klaro ang tubig, mahimo gihapon kining adunay mikrobyo o kemikal nga dili makita sa sensor. Ang lab test o ang inyong RHU (Rural Health Unit) lang ang makasulti kung mahimo na bang imnon ang tubig.</string>
+</resources>

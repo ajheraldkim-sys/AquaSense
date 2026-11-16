@@ -3,4 +3,58 @@
     <string name="notif_channel_alerts">Water alerts</string>
     <string name="notif_cloudy_title">Water is cloudy</string>
     <string name="notif_cloudy_text">Don\'t drink it right now. Use stored or boiled water.</string>
+
+    <!-- Bottom navigation -->
+    <string name="tab_now">Now</string>
+    <string name="tab_history">History</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Now screen: states -->
+    <string name="state_clear">Clear</string>
+    <string name="state_getting_cloudy">Getting cloudy</string>
+    <string name="state_cloudy">Cloudy — don\'t drink</string>
+    <string name="word_cloudy">Cloudy</string>
+    <string name="sub_cloudiness">Cloudiness %1$s (limit is %2$s)</string>
+    <string name="sub_check_soon">Check again soon</string>
+    <string name="tip_cloudy">Use stored or boiled water for now.</string>
+    <string name="live_updated">Live · updated %1$s</string>
+    <string name="time_just_now">just now</string>
+    <plurals name="time_seconds_ago">
+        <item quantity="one">%d second ago</item>
+        <item quantity="other">%d seconds ago</item>
+    </plurals>
+    <plurals name="time_minutes_ago">
+        <item quantity="one">%d minute ago</item>
+        <item quantity="other">%d minutes ago</item>
+    </plurals>
+    <plurals name="time_hours_ago">
+        <item quantity="one">%d hour ago</item>
+        <item quantity="other">%d hours ago</item>
+    </plurals>
+    <string name="connecting">Connecting to the water sensor…</string>
+    <string name="not_connected">Not connected</string>
+    <string name="go_near">Go near the water station.</string>
+    <string name="last_seen">Last seen %1$s: %2$s</string>
+    <string name="sensor_problem">Sensor not working</string>
+    <string name="tell_caretaker">Tell the water station caretaker.</string>
+    <string name="needs_cleaning">Sensor needs cleaning</string>
+    <string name="last_24h">Last 24 hours</string>
+    <string name="chart_empty">Not enough readings yet</string>
+    <string name="chart_start">24 hours ago</string>
+    <string name="chart_now">Now</string>
+
+    <!-- Older phones (Android 9 and below): join the station Wi-Fi by hand -->
+    <string name="join_wifi">Join the %1$s Wi-Fi</string>
+    <string name="join_wifi_how">Open your phone\'s Wi-Fi settings and choose it. Password: %1$s</string>
+    <string name="open_wifi_settings">Open Wi-Fi settings</string>
+    <string name="got_it">Got it</string>
+
+    <!-- About sheet -->
+    <string name="about_title">What the colours mean</string>
+    <string name="about_clear">The water looks clear. It is below the limit.</string>
+    <string name="about_getting_cloudy">Close to the limit. Check again soon.</string>
+    <string name="about_cloudy">Above the limit. Use stored or boiled water.</string>
+    <string name="about_grey_title">No reading</string>
+    <string name="about_grey">Not connected, or the sensor is not working.</string>
+    <string name="about_disclaimer">AquaSense only checks how cloudy the water is. Clear water can still have germs or chemicals that the sensor cannot detect. Only a lab test or your RHU (Rural Health Unit) can confirm the water is fit to drink.</string>
 </resources>
