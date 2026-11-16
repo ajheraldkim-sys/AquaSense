@@ -97,13 +97,22 @@ class HistoryDb(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "histor
         return writableDatabase.insert("alerts", null, cv)
     }
 
-    /** Closes the most recent open alert, if any. */
+    /** Closes every open alert (there should be at most one; stray rows must not stay open forever). */
     fun closeAlert(atMs: Long) {
-        writableDatabase.execSQL(
-            "UPDATE alerts SET closed = ? WHERE id = (SELECT id FROM alerts WHERE closed IS NULL ORDER BY id DESC LIMIT 1)",
-            arrayOf<Any>(atMs)
-        )
+        writableDatabase.execSQL("UPDATE alerts SET closed = ? WHERE closed IS NULL", arrayOf<Any>(atMs))
     }
+
+    /** Opening time of the oldest still-open alert, or null. */
+    fun openAlertSince(): Long? =
+        readableDatabase.rawQuery("SELECT MIN(opened) FROM alerts WHERE closed IS NULL", null).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
+
+    /** Timestamp of the newest stored point, or null. */
+    fun lastPointTs(): Long? =
+        readableDatabase.rawQuery("SELECT MAX(ts) FROM points", null).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
 
     /** Alerts opened at or after [sinceMs], newest first. */
     fun alerts(sinceMs: Long): List<AlertRow> =

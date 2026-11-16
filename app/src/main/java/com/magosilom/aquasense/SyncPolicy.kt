@@ -41,6 +41,32 @@ fun displayScreen(
     return screenFor(link, reading, receivedAtMs, lastSeen)
 }
 
+sealed interface CursorStep {
+    /** Fetch the next page from [since]. */
+    data class Next(val since: Long, val jumped: Boolean) : CursorStep
+    /** Stop paging this cycle; persist [since]. */
+    data class Done(val since: Long) : CursorStep
+}
+
+/**
+ * /log cursor rules, applied after a page fetched with [since]:
+ * - ESP seq went backwards (`last_seq < since`: reflashed / NVS erased) -> restart from 0.
+ * - empty page while `last_seq > since` and entries were dropped -> jump once to `oldest_seq - 1`;
+ *   still empty after the jump (or no gap) -> stop this cycle.
+ * - no progress -> stop; otherwise advance to `maxSeqInPage`, done once it reaches `last_seq`.
+ */
+fun nextCursor(page: LogPage, since: Long, jumped: Boolean): CursorStep {
+    if (page.lastSeq < since) return CursorStep.Next(0, jumped)
+    if (page.maxSeqInPage == 0L) {
+        val jumpTo = page.oldestSeq - 1
+        return if (page.lastSeq > since && !jumped && jumpTo > since) CursorStep.Next(jumpTo, true)
+        else CursorStep.Done(since)
+    }
+    if (page.maxSeqInPage <= since) return CursorStep.Done(since)
+    val s = page.maxSeqInPage
+    return if (s >= page.lastSeq) CursorStep.Done(s) else CursorStep.Next(s, jumped)
+}
+
 fun medianOf(xs: List<Double>): Double {
     require(xs.isNotEmpty())
     val s = xs.sorted()

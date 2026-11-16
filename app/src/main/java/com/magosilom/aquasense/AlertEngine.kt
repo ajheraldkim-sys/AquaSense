@@ -18,6 +18,18 @@ class AlertEngine(
     private var clearStart: Long? = null
     private var lastT = Long.MIN_VALUE
 
+    /**
+     * Resumes an alert that is still open in history (e.g. after the process was recreated), so an
+     * ongoing cloudy episode does not notify again and the normal 10-minute clear closes it.
+     * [lastTs] = newest stored point (or [openedMs]); older samples are then ignored.
+     */
+    fun restore(openedMs: Long, lastTs: Long) {
+        isOpen = true
+        runStart = openedMs
+        clearStart = null
+        lastT = maxOf(lastTs, openedMs)
+    }
+
     fun onLive(ntu: Double?, limit: Double, rawNowMs: Long): AlertEvent? {
         if (ntu == null) return null
         val nowMs = maxOf(rawNowMs, lastT)

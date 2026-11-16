@@ -73,4 +73,39 @@ class SyncPolicyTest {
         assertEquals(2.0, medianOf(listOf(3.0, 1.0, 2.0)), 1e-9)
         assertEquals(2.5, medianOf(listOf(4.0, 1.0, 2.0, 3.0)), 1e-9)
     }
+
+    // ---- /log cursor rules
+
+    private fun page(lastSeq: Long, oldestSeq: Long, maxSeq: Long) =
+        LogPage(1, 100, lastSeq, oldestSeq, emptyList(), emptyList(), maxSeq)
+
+    @Test fun cursorAdvancesToMaxSeqInPage() {
+        assertEquals(CursorStep.Next(200, false), nextCursor(page(500, 1, 200), since = 100, jumped = false))
+    }
+
+    @Test fun cursorDoneWhenCaughtUp() {
+        assertEquals(CursorStep.Done(500), nextCursor(page(500, 1, 500), since = 400, jumped = false))
+    }
+
+    @Test fun cursorDoneOnEmptyPageAtEnd() {
+        assertEquals(CursorStep.Done(500), nextCursor(page(500, 1, 0), since = 500, jumped = false))
+    }
+
+    @Test fun cursorJumpsOnceOverDroppedEntries() {
+        assertEquals(CursorStep.Next(299, true), nextCursor(page(900, 300, 0), since = 100, jumped = false))
+        // still empty after the jump: stop this cycle, keep cursor
+        assertEquals(CursorStep.Done(299), nextCursor(page(900, 300, 0), since = 299, jumped = true))
+    }
+
+    @Test fun cursorEmptyPageNoGapStops() {
+        assertEquals(CursorStep.Done(100), nextCursor(page(900, 50, 0), since = 100, jumped = false))
+    }
+
+    @Test fun cursorNoProgressStops() {
+        assertEquals(CursorStep.Done(300), nextCursor(page(900, 1, 250), since = 300, jumped = false))
+    }
+
+    @Test fun cursorResetsWhenEspSeqWentBackwards() {
+        assertEquals(CursorStep.Next(0, false), nextCursor(page(40, 1, 0), since = 5000, jumped = false))
+    }
 }

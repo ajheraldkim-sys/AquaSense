@@ -124,4 +124,24 @@ class AlertEngineTest {
         assertNull(e.onLive(8.0, 5.0, 679_999))
         assertTrue(e.onLive(8.0, 5.0, 680_000) is AlertEvent.Opened)
     }
+
+    @Test fun restoredOpenAlertDoesNotReNotifyAndClosesAfterClear() {
+        val e = AlertEngine()
+        e.restore(openedMs = 1_000, lastTs = 60_000)
+        assertTrue(e.isOpen)
+        assertNull(e.onLive(9.0, 5.0, 100_000))
+        assertNull(e.onLive(9.0, 5.0, 200_000))
+        assertNull(e.onImported(Point(30_000, 9.0), 5.0, 200_000)) // older than lastT: ignored
+        assertNull(e.onLive(1.0, 5.0, 300_000))
+        assertNull(e.onLive(1.0, 5.0, 899_999))
+        assertEquals(AlertEvent.Closed(900_000), e.onLive(1.0, 5.0, 900_000))
+        assertFalse(e.isOpen)
+    }
+
+    @Test fun restoredOpenAlertImportedCloudyDoesNotReopen() {
+        val e = AlertEngine()
+        e.restore(openedMs = 1_000, lastTs = 1_000)
+        assertNull(e.onImported(Point(61_000, 9.0), 5.0, 61_000))
+        assertTrue(e.isOpen)
+    }
 }

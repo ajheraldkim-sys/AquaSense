@@ -8,7 +8,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,8 +22,10 @@ private const val TAG = "AquaSense"
 private const val POLL_MS = 1000L
 private const val CAL_POLL_MS = 1000L
 private const val LOG_PAGE_MAX = 100
-/** Pages per sync cycle (12,000 entries) so a first sync can't starve live polling. */
-private const val MAX_PAGES_PER_CYCLE = 120
+/** Hard cap on pages per sync run (200,000 entries, far above the 7-day log): never page forever. */
+private const val MAX_PAGES_PER_SYNC = 2000
+/** Consecutive failed sync runs (time or log) before giving up until the next refresh. */
+private const val MAX_SYNC_FAILURES = 3
 /** v3: re-page the minute log this often while connected so History keeps filling in. */
 private const val LOG_REFRESH_MS = 60_000L
 private const val DAY_MS = 86_400_000L
@@ -79,6 +82,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 Log.w(TAG, "history init failed", e)
             }
+            // An alert still open from an earlier process: resume it instead of re-notifying.
+            try {
+                db.openAlertSince()?.let { opened -> engine.restore(opened, db.lastPointTs() ?: opened) }
+            } catch (e: Exception) {
+                Log.w(TAG, "alert restore failed", e)
+            }
         }
         refreshHistory()
         lastSeen = _history24h.value.lastOrNull()
@@ -94,9 +103,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (fg) {
             if (pollJob?.isActive == true) return
             if (debugBase == null) joiner.start()
+            _screen.value = Screen.Connecting
             pollJob = viewModelScope.launch { pollLoop() }
         } else {
             pollJob?.cancel(); pollJob = null
+            // Never show an hours-old Live screen on resume.
+            _screen.value = Screen.Connecting
             calJob?.cancel(); calJob = null
             joiner.stop()
         }
@@ -152,57 +164,53 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------- live loop
 
-    // Loop state (only touched from the poll coroutine on Main, plus the logDue flag).
-    @Volatile private var logDue = false
+    // Loop state. All of it lives on the Main dispatcher (viewModelScope); only DB I/O hops to IO.
+    // Reset at the start of every pollLoop (each foreground session is a new connection attempt).
+    private var timeDue = false
+    private var logDue = false
+    /** /time and /log usable; false for v2 firmware or after a 404 from either. */
+    private var syncSupported = true
+    private var lastLogMs = 0L
+    private var syncFailures = 0
+    private var syncJob: Job? = null
 
-    private suspend fun pollLoop() {
+    /** R14: only engine.onLive waits, and only while imported history must reach the engine first. */
+    private val holdLive: Boolean get() = logDue && syncSupported
+
+    private suspend fun pollLoop() = coroutineScope {
         dbReady.join()
+        _screen.value = Screen.Connecting
         val startedMs = System.currentTimeMillis()
         var failures = 0
         var reading: LiveReading? = null
         var receivedAt: Long? = null
         var prevBoot: Int? = null
-        var logSupported = true
-        var timeDue = false
-        var lastLogMs = 0L
         var wasDisconnected = false
         var minute = -1L
         val minuteVals = ArrayList<Double>()
+        timeDue = false; logDue = false; syncSupported = true; lastLogMs = 0L; syncFailures = 0; syncJob = null
 
-        var importFailures = 0
-
-        while (currentCoroutineContext().isActive) {
+        while (isActive) {
             val r = try { esp.readings() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
-            val now = System.currentTimeMillis()
+            val now = System.currentTimeMillis() // this reading's own fetch time
             if (r == null) {
                 failures++
             } else {
                 failures = 0
                 // R3: on each (re)connect, sync before live samples reach the alert engine.
                 if (wasDisconnected) prevBoot = null
-                val d = onReading(prevBoot, r, logSupported)
+                val d = onReading(prevBoot, r, syncSupported)
                 prevBoot = r.boot
                 if (d.sendTime) timeDue = true
                 if (d.importLog) logDue = true
-                if (r.isV3 && logSupported && now - lastLogMs >= LOG_REFRESH_MS) logDue = true
+                if (r.isV3 && syncSupported && now - lastLogMs >= LOG_REFRESH_MS) logDue = true
                 limit = r.limit
                 r.station?.takeIf { it.isNotBlank() }?.let { updateStation(it) }
 
-                if (timeDue && r.isV3) {
-                    try { esp.postTime(now / 1000); timeDue = false }
-                    catch (e: CancellationException) { throw e } catch (e: Exception) { Log.w(TAG, "postTime failed", e) }
-                }
-                if (logDue && r.isV3 && logSupported) {
-                    try {
-                        if (importLog(r.limit)) { logDue = false; lastLogMs = now }
-                        importFailures = 0
-                    } catch (e: CancellationException) { throw e } catch (e: Unsupported) {
-                        logSupported = false; logDue = false
-                    } catch (e: Exception) {
-                        Log.w(TAG, "log import failed", e)
-                        // Don't hold live alerts hostage to a failing /log: retry at the next refresh.
-                        if (++importFailures >= 3) { logDue = false; lastLogMs = now; importFailures = 0 }
-                    }
+                // Sync runs beside the poll loop so /readings keeps its 1 s rhythm (R14).
+                if (r.isV3 && syncSupported && (timeDue || logDue) && syncJob?.isActive != true) {
+                    val lim = r.limit
+                    syncJob = launch { syncOnce(lim) }
                 }
 
                 reading = r
@@ -211,10 +219,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val fresh = ntu != null && (r.ageMs ?: 0L) <= READING_STALE_MS
                 if (fresh && ntu != null) {
                     lastSeen = Point(now, ntu)
-                    // Imported points must precede live samples: hold live alerts until the import finished.
-                    if (!logDue) handle(engine.onLive(ntu, r.limit, now))
+                    if (!holdLive) handle(engine.onLive(ntu, r.limit, now))
                     // v2 firmware (no /log): keep one median point per minute ourselves.
-                    if (!r.isV3 || !logSupported) {
+                    if (!r.isV3 || !syncSupported) {
                         val m = now / 60_000L
                         if (m != minute) {
                             if (minuteVals.isNotEmpty() && minute >= 0) savePoint(Point(minute * 60_000L, medianOf(minuteVals)))
@@ -224,48 +231,71 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            val after = System.currentTimeMillis()
-            wasDisconnected = shouldShowNotConnected(failures, receivedAt, after, startedMs)
-            _screen.value = displayScreen(reading, receivedAt, lastSeen, failures, startedMs, after)
+            wasDisconnected = shouldShowNotConnected(failures, receivedAt, now, startedMs)
+            _screen.value = displayScreen(reading, receivedAt, lastSeen, failures, startedMs, now)
             delay(if (failures == 0) POLL_MS else backoffMs(failures))
         }
     }
 
-    /**
-     * Pages /log from the persisted cursor. Returns true when caught up, false when the page cap
-     * was hit (continue next cycle). Never loops forever on an empty page.
-     */
-    private suspend fun importLog(limit: Double): Boolean {
+    /** One sync run: POST /time first; the log is imported only once the ESP32 clock is set (R14). */
+    private suspend fun syncOnce(limit: Double) {
+        try {
+            if (timeDue) {
+                esp.postTime(System.currentTimeMillis() / 1000)
+                timeDue = false
+            }
+            if (logDue) {
+                importLog(limit)
+                logDue = false
+                lastLogMs = System.currentTimeMillis()
+            }
+            syncFailures = 0
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Unsupported) {
+            // Treat like v2 firmware: stop retrying /time and /log, record live minutes ourselves.
+            syncSupported = false; timeDue = false; logDue = false
+        } catch (e: Exception) {
+            Log.w(TAG, "sync failed", e)
+            // Don't hold live alerts hostage to a failing sync: give up until the next refresh.
+            // (timeDue stays set, so the next run still sets the clock before importing.)
+            if (++syncFailures >= MAX_SYNC_FAILURES) {
+                logDue = false; lastLogMs = System.currentTimeMillis(); syncFailures = 0
+            }
+        }
+    }
+
+    /** Pages /log from the persisted cursor until [nextCursor] says done (or the hard page cap). */
+    private suspend fun importLog(limit: Double) {
         var since = withContext(Dispatchers.IO) { db.meta(META_LAST_SEQ)?.toLongOrNull() ?: 0L }
         var jumped = false
         try {
-            repeat(MAX_PAGES_PER_CYCLE) {
+            repeat(MAX_PAGES_PER_SYNC) {
                 val page = esp.log(since, LOG_PAGE_MAX)
-                if (page.maxSeqInPage == 0L) {
-                    // entries:[] — if entries before oldest_seq were dropped, skip past the gap once.
-                    if (page.lastSeq > since && !jumped && page.oldestSeq - 1 > since) {
-                        jumped = true
-                        since = page.oldestSeq - 1
-                        saveCursor(since)
-                        return@repeat
-                    }
-                    return true
-                }
                 val now = System.currentTimeMillis()
                 val pts = page.points.sortedBy { it.tsMs }
-                withContext(Dispatchers.IO) {
-                    db.addPoints(pts)
-                    db.addCalEvents(page.calEvents)
+                if (pts.isNotEmpty() || page.calEvents.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        db.addPoints(pts)
+                        db.addCalEvents(page.calEvents)
+                    }
                 }
                 for (p in pts) handle(engine.onImported(p, limit, now))
-                if (page.maxSeqInPage <= since) return true // no progress: stop this cycle
-                since = page.maxSeqInPage
-                saveCursor(since)
-                if (since >= page.lastSeq) return true
+                when (val step = nextCursor(page, since, jumped)) {
+                    is CursorStep.Done -> {
+                        if (step.since != since) saveCursor(step.since)
+                        return
+                    }
+                    is CursorStep.Next -> {
+                        since = step.since
+                        jumped = step.jumped
+                        saveCursor(since)
+                    }
+                }
             }
-            return false
+            Log.w(TAG, "log import hit the page cap; continuing at the next refresh")
         } finally {
-            refreshHistory()
+            withContext(NonCancellable) { refreshHistory() }
         }
     }
 
@@ -277,17 +307,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         refreshHistory()
     }
 
-    /** Persists alert events; notifies only on a fresh Opened. */
+    /**
+     * Notifies (only on a fresh Opened) before persisting; NonCancellable so going to the background
+     * mid-event can't drop the notification or leave the engine and the DB out of step.
+     */
     private suspend fun handle(e: AlertEvent?) {
-        when (e) {
-            null -> return
-            is AlertEvent.Opened -> {
-                withContext(Dispatchers.IO) { db.openAlert(e.atMs, e.ntu) }
-                if (e.notify) Notifier.alert(getApplication(), R.string.notif_cloudy_title, R.string.notif_cloudy_text)
+        if (e == null) return
+        withContext(NonCancellable) {
+            when (e) {
+                is AlertEvent.Opened -> {
+                    if (e.notify) Notifier.alert(getApplication(), R.string.notif_cloudy_title, R.string.notif_cloudy_text)
+                    withContext(Dispatchers.IO) { db.openAlert(e.atMs, e.ntu) }
+                }
+                is AlertEvent.Closed -> withContext(Dispatchers.IO) { db.closeAlert(e.atMs) }
             }
-            is AlertEvent.Closed -> withContext(Dispatchers.IO) { db.closeAlert(e.atMs) }
+            refreshHistory()
         }
-        refreshHistory()
     }
 
     private suspend fun refreshHistory() {
