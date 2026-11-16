@@ -6,28 +6,28 @@
 float voltsToNtu(float sensorVolts, float clearVolts) {
   if (!std::isfinite(sensorVolts) || !std::isfinite(clearVolts) || clearVolts <= 0.3f) return 0.0f;
   float r = sensorVolts / clearVolts;
-  if (r >= 0.990f) return 0.0f;   // 1.0% deadband absorbs USB/breadboard ripple in clean water
+  if (r >= 0.994f) return 0.0f;   // 0.6% deadband absorbs minor ADC ripple in clean water
   if (r <= 0.25f) return 3000.0f;
   float drop = 1.0f - r;  // fractional light loss relative to calibrated clean water
-  if (drop <= 0.035f) {
-    // 1.0% .. 3.5% drop -> 0 .. 1 NTU (Excellent)
-    return (drop - 0.010f) / (0.035f - 0.010f) * 1.0f;
+  if (drop <= 0.022f) {
+    // 0.6% .. 2.2% drop -> 0 .. 1 NTU (Excellent)
+    return (drop - 0.006f) / (0.022f - 0.006f) * 1.0f;
   }
-  if (drop <= 0.100f) {
-    // 3.5% .. 10.0% drop -> 1 .. 5 NTU (Good)
-    return 1.0f + (drop - 0.035f) / (0.100f - 0.035f) * 4.0f;
+  if (drop <= 0.050f) {
+    // 2.2% .. 5.0% drop -> 1 .. 5 NTU (Good)
+    return 1.0f + (drop - 0.022f) / (0.050f - 0.022f) * 4.0f;
   }
-  if (drop <= 0.250f) {
-    // 10.0% .. 25.0% drop -> 5 .. 20 NTU (Fair)
-    return 5.0f + (drop - 0.100f) / (0.250f - 0.100f) * 15.0f;
+  if (drop <= 0.095f) {
+    // 5.0% .. 9.5% drop -> 5 .. 20 NTU (Fair)
+    return 5.0f + (drop - 0.050f) / (0.095f - 0.050f) * 15.0f;
   }
-  if (drop <= 0.450f) {
-    // 25.0% .. 45.0% drop -> 20 .. 50 NTU (Poor)
-    return 20.0f + (drop - 0.250f) / (0.450f - 0.250f) * 30.0f;
+  if (drop <= 0.160f) {
+    // 9.5% .. 16.0% drop -> 20 .. 50 NTU (Poor)
+    return 20.0f + (drop - 0.095f) / (0.160f - 0.095f) * 30.0f;
   }
-  // 45.0% .. 75.0% drop -> 50 .. 3000 NTU (Very Poor)
-  float maxDrop = 0.750f;
-  float frac = (drop - 0.450f) / (maxDrop - 0.450f);
+  // 16.0% .. 55.0% drop -> 50 .. 3000 NTU (Very Poor)
+  float maxDrop = 0.550f;
+  float frac = (drop - 0.160f) / (maxDrop - 0.160f);
   float ntu = 50.0f + frac * 2950.0f;
   return ntu > 3000.0f ? 3000.0f : ntu;
 }

@@ -87,6 +87,7 @@ const char* BLE_STATION_UUID = "6e1a0004-6a3b-4c2d-9f10-a9a5e0c0a5e1";
 
 // ---------------- SENSOR -------------------------------------
 const int   TURB_PIN     = 34;
+const int   TURB_PIN_ALT = 35;     // auto-detect if brown wire is in D35 next to D34
 const float TURB_DIVIDER = 1.5;    // voltage divider ratio between sensor output and ESP32 pin
 const int   BUTTON_PIN   = 0;      // BOOT button, active LOW
 
@@ -267,11 +268,16 @@ void takeSample() {
     steadyHighCount = 0;
     return;
   }
+  // Clear the 1.214 V artifact from multi-pin test boot if present
+  if (!hasGoodSample && calV > 1.18f && calV < 1.25f && v < 1.05f) {
+    calV = 0.808f;
+    prefs.putFloat("cal_v", calV);
+  }
   // Initialize baseline at boot if uncalibrated, or recover if clean water is steadier & higher than a stale low calV
-  if (!hasGoodSample && v >= 0.5f && v <= 4.30f && (calEpoch == 0 || v > calV + 0.08f)) {
+  if (!hasGoodSample && v >= 0.5f && v <= 4.30f && (calEpoch == 0 && !prefs.isKey("cal_v") || v > calV + 0.08f)) {
     calV = v;
     prefs.putFloat("cal_v", calV);
-  } else if (v > calV + 0.04f && v <= 4.30f) {
+  } else if (v > calV + 0.03f && v <= 4.30f) {
     if (steadyHighCount == 0) {
       steadyHighMin = v;
       steadyHighMax = v;
@@ -279,7 +285,7 @@ void takeSample() {
     } else {
       if (v < steadyHighMin) steadyHighMin = v;
       if (v > steadyHighMax) steadyHighMax = v;
-      if (steadyHighMax - steadyHighMin <= 0.04f) {
+      if (steadyHighMax - steadyHighMin <= 0.03f) {
         if (++steadyHighCount >= 15) {  // 3 seconds of steady clean-water ceiling
           calV = (steadyHighMin + steadyHighMax) * 0.5f;
           prefs.putFloat("cal_v", calV);
