@@ -151,22 +151,22 @@ CalState prevCalState = CAL_IDLE;
 uint32_t uptimeS() { return (uint32_t)(esp_timer_get_time() / 1000000ULL); }  // no 49-day wrap
 
 /*
-  Read N ADC samples, drop the lowest and highest 20 %, average the rest.
-  Returns the voltage at the SENSOR output (divider undone). Takes ~15 ms.
+  Read N ADC samples, drop the lowest and highest 25 %, average the rest.
+  Returns the voltage at the SENSOR output (divider undone). Takes ~16 ms.
 */
 float readSensorVolts(int pin, float divider) {
-  const int N = 30;
+  const int N = 64;
   uint32_t mv[N];
   for (int i = 0; i < N; i++) {
     mv[i] = analogReadMilliVolts(pin);   // factory-calibrated millivolts
-    delayMicroseconds(500);
+    delayMicroseconds(250);
   }
   for (int i = 1; i < N; i++) {          // insertion sort (tiny N)
     uint32_t k = mv[i]; int j = i - 1;
     while (j >= 0 && mv[j] > k) { mv[j + 1] = mv[j]; j--; }
     mv[j + 1] = k;
   }
-  const int cut = N / 5;
+  const int cut = N / 4;
   uint32_t sum = 0;
   for (int i = cut; i < N - cut; i++) sum += mv[i];
   return (sum / (float)(N - 2 * cut)) / 1000.0 * divider;
@@ -254,18 +254,43 @@ void appendLog(float value, uint8_t kind) {
 }
 
 // ------------------------------------------------------ sampling
+int   steadyHighCount = 0;
+float steadyHighMin = 99.0f;
+float steadyHighMax = 0.0f;
+
 void takeSample() {
   float v = readSensorVolts(TURB_PIN, TURB_DIVIDER);
   lastVolts = v;
   if (v < 0.3) {              // floating / unplugged input reads near 0 V
     rolling.push(NAN);        // ignored by the window ...
     rolling.clear();          // ... so drop old values: serve null, never a stale number
+    steadyHighCount = 0;
     return;
   }
-  // Only initialize baseline once on a brand-new uncalibrated board; never ratchet on spikes!
-  if (!hasGoodSample && calEpoch == 0 && !prefs.isKey("cal_v") && v >= 0.5f && v <= 4.9f) {
+  // Initialize baseline at boot if uncalibrated, or recover if clean water is steadier & higher than a stale low calV
+  if (!hasGoodSample && v >= 0.5f && v <= 4.30f && (calEpoch == 0 || v > calV + 0.08f)) {
     calV = v;
     prefs.putFloat("cal_v", calV);
+  } else if (v > calV + 0.04f && v <= 4.30f) {
+    if (steadyHighCount == 0) {
+      steadyHighMin = v;
+      steadyHighMax = v;
+      steadyHighCount = 1;
+    } else {
+      if (v < steadyHighMin) steadyHighMin = v;
+      if (v > steadyHighMax) steadyHighMax = v;
+      if (steadyHighMax - steadyHighMin <= 0.04f) {
+        if (++steadyHighCount >= 15) {  // 3 seconds of steady clean-water ceiling
+          calV = (steadyHighMin + steadyHighMax) * 0.5f;
+          prefs.putFloat("cal_v", calV);
+          steadyHighCount = 0;
+        }
+      } else {
+        steadyHighCount = 0;
+      }
+    }
+  } else {
+    steadyHighCount = 0;
   }
   rolling.push(voltsToNtu(v, calV));
   lastGoodSample = millis();
