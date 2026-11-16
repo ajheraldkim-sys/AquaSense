@@ -235,25 +235,36 @@ fun ProgressRing(
     }
 }
 
+
 private const val READY_WINDOW_S = 60
 
 /**
- * The calibration flow, driven only by [cal] (the ESP32's /cal status):
- * step 1 + Start → SETTLING (steady ring) → READY (press the button, 60 s countdown) →
- * DONE / REJECTED (plain reason) / EXPIRED. [started] covers the moment between Start and the
- * first /cal answer. [reachable] false (no sensor Wi-Fi or old firmware) disables Start.
- * No volts or technical words are shown.
+ * The calibration flow, driven only by [session] (see [calSessionStep]):
+ * step 1 + Start → SETTLING (steady ring) → READY (press the button, 60 s countdown from the
+ * session's first READY) → DONE / REJECTED (plain reason) / EXPIRED. A failed start shows
+ * "That didn't work" with Start again. [reachable] false disables Start and, mid-session, says
+ * the sensor's Wi-Fi is needed. No volts or technical words are shown. The ESP32 has no cancel,
+ * so the button only closes the flow ("Close").
  */
 @Composable
 fun CalibrationSteps(
-    cal: CalStatus?, started: Boolean, reachable: Boolean,
+    session: CalUiSession, reachable: Boolean,
     onStart: () -> Unit, onClose: () -> Unit,
 ) {
+    val cal = session.status
     val phase = cal?.phase
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (session.active && !session.terminal && !reachable) {
+            Text(stringResource(R.string.cal_needs_wifi), color = amberText(), fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center)
+        }
         when {
-            phase == null && !started -> {
+            !session.active -> {
+                if (session.startFailed) {
+                    Text(stringResource(R.string.cal_failed), Modifier.fillMaxWidth(), color = Red,
+                        fontWeight = FontWeight.SemiBold)
+                }
                 Text(stringResource(R.string.cal_step1), Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
                 if (!reachable) Caption(stringResource(R.string.cal_needs_wifi), Modifier.fillMaxWidth())
                 Button(onStart, Modifier.fillMaxWidth(), enabled = reachable) { Text(stringResource(R.string.cal_start)) }
@@ -261,21 +272,24 @@ fun CalibrationSteps(
             phase == null || phase == CalPhase.IDLE -> {
                 CircularProgressIndicator()
                 Text(stringResource(R.string.cal_starting), textAlign = TextAlign.Center)
-                OutlinedButton(onClose) { Text(stringResource(R.string.cal_cancel)) }
+                OutlinedButton(onClose) { Text(stringResource(R.string.cal_close)) }
             }
             phase == CalPhase.SETTLING -> {
                 val s = cal.secondsStable.coerceIn(0, 60)
                 ProgressRing(s / 60f, stringResource(R.string.cal_progress, s))
                 Text(stringResource(R.string.cal_settling), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-                OutlinedButton(onClose) { Text(stringResource(R.string.cal_cancel)) }
+                OutlinedButton(onClose) { Text(stringResource(R.string.cal_close)) }
             }
             phase == CalPhase.READY -> {
-                // The ESP32 only accepts the button within 60 s of "ready"; count down from when we saw it.
-                val readyAt = remember { System.currentTimeMillis() }
-                val left by produceState(READY_WINDOW_S) {
+                // The ESP32 only accepts the button within 60 s of "ready"; the session keeps the
+                // first READY time, so leaving and returning to the tab does not restart the count.
+                val readyAt = session.readyAtMs ?: System.currentTimeMillis()
+                fun leftNow() = (READY_WINDOW_S - ((System.currentTimeMillis() - readyAt) / 1000).toInt())
+                    .coerceIn(0, READY_WINDOW_S)
+                val left by produceState(leftNow(), readyAt) {
                     while (value > 0) {
                         delay(1000)
-                        value = (READY_WINDOW_S - ((System.currentTimeMillis() - readyAt) / 1000).toInt()).coerceAtLeast(0)
+                        value = leftNow()
                     }
                 }
                 val leftText = LocalContext.current.resources.getQuantityString(R.plurals.cal_seconds_left, left, left)
@@ -284,7 +298,7 @@ fun CalibrationSteps(
                 }
                 Text(stringResource(R.string.cal_ready), fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 Caption(leftText)
-                OutlinedButton(onClose) { Text(stringResource(R.string.cal_cancel)) }
+                OutlinedButton(onClose) { Text(stringResource(R.string.cal_close)) }
             }
             phase == CalPhase.DONE -> {
                 StatusOrb(WaterState.CLEAR, pulsing = false, size = 96.dp)

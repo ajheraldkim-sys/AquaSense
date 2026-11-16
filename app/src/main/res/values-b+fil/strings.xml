@@ -65,7 +65,7 @@
     <string name="day_clear">Malinaw buong araw</string>
     <string name="day_getting_cloudy">Medyo lumabo</string>
     <string name="day_cloudy">Malabo nang %1$s (%2$s–%3$s)</string>
-    <string name="day_average">Karaniwan %1$s</string>
+    <string name="day_average">Katamtaman %1$s</string>
     <string name="dur_hours">%1$d oras</string>
     <string name="dur_minutes">%1$d min</string>
     <string name="dur_hours_minutes">%1$d oras %2$d min</string>
@@ -80,7 +80,7 @@
     <string name="report_period">Panahon: %1$s hanggang %2$s</string>
     <string name="report_limit">Hangganan ng labo: %1$s NTU</string>
     <string name="report_days">Buod bawat araw (turbidity sa NTU):</string>
-    <string name="report_day">%1$s: %2$s, karaniwan %3$s NTU</string>
+    <string name="report_day">%1$s: %2$s, katamtaman %3$s NTU</string>
     <string name="report_alerts">Mga babala sa labo:</string>
     <string name="report_alert_closed">%1$s hanggang %2$s, pinakamataas %3$s NTU</string>
     <string name="report_alert_open">mula %1$s (malabo pa rin), pinakamataas %2$s NTU</string>
@@ -98,6 +98,7 @@
     <string name="station_hint">Ito ang pangalang makikita sa bawat phone.</string>
     <string name="station_save">I-save</string>
     <string name="station_needs_wifi">Para palitan ang pangalan, kumonekta sa Wi-Fi ng sensor.</string>
+    <string name="station_failed">Hindi na-save ang pangalan. Subukan ulit malapit sa sensor.</string>
     <string name="sensor_care">Pag-aalaga sa sensor</string>
     <string name="cal_today">Na-calibrate ngayong araw</string>
     <plurals name="cal_days_ago">
@@ -122,7 +123,6 @@
     <string name="cal_out_of_range">Nasa tubig ba ang sensor?</string>
     <string name="cal_failed">Hindi gumana. Subukan ulit.</string>
     <string name="cal_expired">Natagalan — subukan ulit</string>
-    <string name="cal_cancel">Kanselahin</string>
     <string name="cal_close">Isara</string>
     <string name="cal_try_again">Subukan ulit</string>
     <string name="cal_needs_wifi">Kailangan ng Wi-Fi ng sensor para mag-calibrate</string>

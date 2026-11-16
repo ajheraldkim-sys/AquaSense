@@ -65,7 +65,7 @@
     <string name="day_clear">Tin-aw tibuok adlaw</string>
     <string name="day_getting_cloudy">Medyo milubog</string>
     <string name="day_cloudy">Lubog sulod sa %1$s (%2$s–%3$s)</string>
-    <string name="day_average">Kasagaran %1$s</string>
+    <string name="day_average">Promedyo %1$s</string>
     <string name="dur_hours">%1$d ka oras</string>
     <string name="dur_minutes">%1$d min</string>
     <string name="dur_hours_minutes">%1$d ka oras %2$d min</string>
@@ -80,7 +80,7 @@
     <string name="report_period">Panahon: %1$s hangtod %2$s</string>
     <string name="report_limit">Limitasyon sa kalubog: %1$s NTU</string>
     <string name="report_days">Summary matag adlaw (turbidity sa NTU):</string>
-    <string name="report_day">%1$s: %2$s, kasagaran %3$s NTU</string>
+    <string name="report_day">%1$s: %2$s, promedyo %3$s NTU</string>
     <string name="report_alerts">Mga pahibalo sa kalubog:</string>
     <string name="report_alert_closed">%1$s hangtod %2$s, pinakataas %3$s NTU</string>
     <string name="report_alert_open">sukad %1$s (lubog pa gihapon), pinakataas %2$s NTU</string>
@@ -97,7 +97,8 @@
     <string name="settings_station">Ngalan sa estasyon</string>
     <string name="station_hint">Kini nga ngalan ang makita sa matag phone.</string>
     <string name="station_save">I-save</string>
-    <string name="station_needs_wifi">Aron usbon ang ngalan, konektar sa Wi-Fi sa sensor.</string>
+    <string name="station_needs_wifi">Aron usbon ang ngalan, magkonektar sa Wi-Fi sa sensor.</string>
+    <string name="station_failed">Wala ma-save ang ngalan. Sulayi pag-usab duol sa sensor.</string>
     <string name="sensor_care">Pag-atiman sa sensor</string>
     <string name="cal_today">Na-calibrate karong adlawa</string>
     <plurals name="cal_days_ago">
@@ -122,7 +123,6 @@
     <string name="cal_out_of_range">Naa ba sa tubig ang sensor?</string>
     <string name="cal_failed">Wala molampos. Sulayi pag-usab.</string>
     <string name="cal_expired">Dugay kaayo — sulayi pag-usab</string>
-    <string name="cal_cancel">Kanselahon</string>
     <string name="cal_close">Isira</string>
     <string name="cal_try_again">Sulayi pag-usab</string>
     <string name="cal_needs_wifi">Kinahanglan ang Wi-Fi sa sensor aron ma-calibrate</string>

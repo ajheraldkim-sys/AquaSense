@@ -64,10 +64,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val needsCleaning: StateFlow<Boolean> = _needsCleaning
     private val _station = MutableStateFlow(prefs.getString(KEY_STATION, null) ?: DEFAULT_STATION)
     val station: StateFlow<String> = _station
-    private val _cal = MutableStateFlow<CalStatus?>(null)
-    val cal: StateFlow<CalStatus?> = _cal
+    /** The current calibration session (see [calSessionStep]); [CalUiSession.Idle] when none. */
+    private val _calSession = MutableStateFlow(CalUiSession.Idle)
+    val calSession: StateFlow<CalUiSession> = _calSession
     private val _lastCal = MutableStateFlow<CalEvent?>(null)
     val lastCal: StateFlow<CalEvent?> = _lastCal
+    /** ESP32's own calibration time (`cal_epoch`, seconds) from the latest reading. */
+    @Volatile private var deviceCalEpochS: Long? = null
+    /** Effective last calibration: newer of the recorded event and the ESP32's `cal_epoch`. */
+    private val _lastCalMs = MutableStateFlow<Long?>(null)
+    val lastCalMs: StateFlow<Long?> = _lastCalMs
+    /** True after the last station rename failed (cleared on the next attempt). */
+    private val _stationFailed = MutableStateFlow(false)
+    val stationFailed: StateFlow<Boolean> = _stationFailed
     private val _wifiSupported = MutableStateFlow(joiner.supported)
     val wifiSupported: StateFlow<Boolean> = _wifiSupported
     /** Calibration events of the last 30 days, newest first (History rows). */
@@ -125,50 +134,64 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // Never show an hours-old Live screen on resume.
             _screen.value = Screen.Connecting
             calJob?.cancel(); calJob = null
-            _cal.value = null // polling stopped: never show a stale calibration step on resume
+            _calSession.value = CalUiSession.Idle // polling stopped: never show a stale step on resume
             _sensorReachable.value = false
             joiner.stop()
         }
     }
 
-    /** Starts calibration on the ESP32 and polls /cal every second until it ends or [stopCalibration]. */
+    /**
+     * Starts calibration on the ESP32 and polls /cal every second until the session ends or
+     * [stopCalibration]. A failed start polls nothing (the ESP32 would still report its previous
+     * result). A calibration is recorded only on DONE after a READY of this session.
+     */
     fun startCalibration() {
         calJob?.cancel()
+        _calSession.value = CalUiSession.started()
         calJob = viewModelScope.launch {
-            _cal.value = null
             try { esp.calStart() } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 Log.w(TAG, "cal start failed", e)
+                _calSession.value = CalUiSession.startFailed()
+                return@launch
             }
             while (isActive) {
                 val s = try { esp.cal() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
-                if (s != null) {
-                    _cal.value = s
-                    if (s.phase == CalPhase.DONE) {
-                        s.calVolts?.let { _lastCal.value = CalEvent(System.currentTimeMillis(), it) }
-                        logDue = true // the ESP32 logs the calibration; pull it into history
-                    }
-                    if (s.phase == CalPhase.DONE || s.phase == CalPhase.REJECTED || s.phase == CalPhase.EXPIRED) break
+                val now = System.currentTimeMillis()
+                val prev = _calSession.value
+                val next = calSessionStep(prev, s, now)
+                _calSession.value = next
+                if (next.calibrated && !prev.calibrated) {
+                    _lastCal.value = CalEvent(now, s?.calVolts ?: Double.NaN)
+                    updateLastCalMs()
+                    logDue = true // the ESP32 logs the calibration; pull it into history
                 }
+                if (next.terminal) break
                 delay(CAL_POLL_MS)
             }
         }
     }
 
-    /** Calibration UI closed: stop polling /cal. */
+    /** Calibration UI closed: stop polling /cal (the ESP32 has no cancel; its session just expires). */
     fun stopCalibration() {
         calJob?.cancel(); calJob = null
-        _cal.value = null
+        _calSession.value = CalUiSession.Idle
+    }
+
+    private fun updateLastCalMs() {
+        _lastCalMs.value = lastCalibrationMs(_lastCal.value?.tsMs, deviceCalEpochS)
     }
 
     fun setStation(name: String) {
         val n = name.trim()
         if (n.isEmpty()) return
+        _stationFailed.value = false
         viewModelScope.launch {
             try {
                 esp.setStation(n)
                 updateStation(n)
             } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 Log.w(TAG, "setStation failed", e)
+                _stationFailed.value = true
             }
         }
     }
@@ -223,6 +246,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (r.isV3 && syncSupported && now - lastLogMs >= LOG_REFRESH_MS) logDue = true
                 limit = r.limit
                 _limit.value = r.limit
+                if (r.calEpochS != null && r.calEpochS != deviceCalEpochS) {
+                    deviceCalEpochS = r.calEpochS
+                    updateLastCalMs()
+                }
                 r.station?.takeIf { it.isNotBlank() }?.let { updateStation(it) }
 
                 // Sync runs beside the poll loop so /readings keeps its 1 s rhythm (R14).
@@ -369,6 +396,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val dbCal = snap.lastCal
             val memCal = _lastCal.value
             if (dbCal != null && (memCal == null || dbCal.tsMs >= memCal.tsMs)) _lastCal.value = dbCal
+            updateLastCalMs()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

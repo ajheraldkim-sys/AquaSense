@@ -85,6 +85,12 @@ class StringsTest {
         assertEquals("Is the sensor in the water?", e("cal_out_of_range"))
         assertEquals("Took too long — try again", e("cal_expired"))
         assertEquals("Calibration needs the sensor's Wi-Fi", e("cal_needs_wifi"))
+        assertEquals("That didn't work. Try again.", e("cal_failed"))
+        assertEquals("Close", e("cal_close"))
+        assertFalse("no Cancel: the ESP32 has no cancel endpoint", en.containsKey("cal_cancel"))
+        assertEquals("Katamtaman %1\$s", fil["day_average"])
+        assertEquals("Promedyo %1\$s", ceb["day_average"])
+        assertTrue(ceb["station_needs_wifi"]!!.contains("magkonektar sa Wi-Fi"))
     }
 
     /** Residents' History rows say "cloudy", never units; only the share report (report_*) may say NTU. */

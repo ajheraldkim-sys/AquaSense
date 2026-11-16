@@ -254,7 +254,6 @@ private fun JoinWifiHint(screen: Screen) {
 
 // ------------------------------------------------------------- formatting
 
-private const val DAY_MS = 86_400_000L
 private const val CAL_REMINDER_DAYS = 30
 
 private fun localeOf(ctx: Context): Locale = ctx.resources.configuration.locales[0] ?: Locale.getDefault()
@@ -323,7 +322,7 @@ private fun alertText(ctx: Context, a: AlertRow): String {
  */
 fun buildReport(
     ctx: Context, station: String, limit: Double, days: List<DaySummary>, alerts: List<AlertRow>,
-    lastCal: CalEvent?, nowMs: Long,
+    lastCalMs: Long?, nowMs: Long,
 ): String {
     fun date(ts: Long) = fmt(ctx, "dMMMyyyy", ts)
     fun dateTime(ts: Long) = date(ts) + " " + timeOfDay(ctx, ts)
@@ -356,8 +355,8 @@ fun buildReport(
         }
         appendLine()
         appendLine(
-            if (lastCal == null) ctx.getString(R.string.report_never_calibrated)
-            else ctx.getString(R.string.report_calibrated, date(lastCal.tsMs))
+            if (lastCalMs == null) ctx.getString(R.string.report_never_calibrated)
+            else ctx.getString(R.string.report_calibrated, date(lastCalMs))
         )
         appendLine()
         append(ctx.getString(R.string.report_disclaimer))
@@ -389,7 +388,7 @@ fun HistoryScreen(vm: AppViewModel) {
     val calEvents by vm.calEvents.collectAsState()
     val limit by vm.currentLimit.collectAsState()
     val station by vm.station.collectAsState()
-    val lastCal by vm.lastCal.collectAsState()
+    val lastCalMs by vm.lastCalMs.collectAsState()
     val events = remember(alerts, calEvents) {
         (alerts.map { HistoryEvent.Alert(it) } + calEvents.map { HistoryEvent.Cal(it) }).sortedByDescending { it.ts }
     }
@@ -431,7 +430,7 @@ fun HistoryScreen(vm: AppViewModel) {
         val shareTitle = stringResource(R.string.share_report)
         OutlinedButton(
             onClick = {
-                val text = buildReport(ctx, station, limit, days, alerts, lastCal, System.currentTimeMillis())
+                val text = buildReport(ctx, station, limit, days, alerts, lastCalMs, System.currentTimeMillis())
                 val send = Intent(Intent.ACTION_SEND).setType("text/plain")
                     .putExtra(Intent.EXTRA_SUBJECT, ctx.getString(R.string.report_title))
                     .putExtra(Intent.EXTRA_TEXT, text)
@@ -491,6 +490,7 @@ fun SettingsScreen(vm: AppViewModel) {
     val language by vm.language.collectAsState()
     val station by vm.station.collectAsState()
     val reachable by vm.sensorReachable.collectAsState()
+    val stationFailed by vm.stationFailed.collectAsState()
     var showAbout by rememberSaveable { mutableStateOf(false) }
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
@@ -524,6 +524,7 @@ fun SettingsScreen(vm: AppViewModel) {
             )
             Spacer(Modifier.height(6.dp))
             Caption(stringResource(if (reachable) R.string.station_hint else R.string.station_needs_wifi))
+            if (stationFailed) Caption(stringResource(R.string.station_failed), color = Red)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Button({ vm.setStation(trimmed) }, enabled = reachable && trimmed.isNotEmpty() && trimmed != station) {
                     Text(stringResource(R.string.station_save))
@@ -548,17 +549,15 @@ fun SettingsScreen(vm: AppViewModel) {
 @Composable
 private fun SensorCare(vm: AppViewModel, reachable: Boolean) {
     val ctx = LocalContext.current
-    val cal by vm.cal.collectAsState()
-    val lastCal by vm.lastCal.collectAsState()
+    val session by vm.calSession.collectAsState()
+    val lastCalMs by vm.lastCalMs.collectAsState()
     val needsCleaning by vm.needsCleaning.collectAsState()
     val screen by vm.screen.collectAsState()
-    var started by remember { mutableStateOf(false) }
-    val last = lastCal
-    val now = System.currentTimeMillis()
     Panel(Modifier.fillMaxWidth()) {
         SectionTitle(stringResource(R.string.sensor_care))
         Spacer(Modifier.height(8.dp))
-        val ago = last?.let { ChronoUnit.DAYS.between(localDate(it.tsMs), LocalDate.now()).toInt().coerceAtLeast(0) }
+        // One calendar-day count drives both the label and the reminder.
+        val ago = lastCalMs?.let { ChronoUnit.DAYS.between(localDate(it), LocalDate.now()).toInt().coerceAtLeast(0) }
         Text(
             when (ago) {
                 null -> stringResource(R.string.cal_never)
@@ -566,7 +565,7 @@ private fun SensorCare(vm: AppViewModel, reachable: Boolean) {
                 else -> ctx.resources.getQuantityString(R.plurals.cal_days_ago, ago, ago)
             }
         )
-        if (last == null || now - last.tsMs > CAL_REMINDER_DAYS * DAY_MS) {
+        if (ago == null || ago >= CAL_REMINDER_DAYS) {
             Text(stringResource(R.string.cal_reminder), color = amberText(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
         val health: Pair<Color, String>? = when {
@@ -588,9 +587,9 @@ private fun SensorCare(vm: AppViewModel, reachable: Boolean) {
         }
         HorizontalDivider(Modifier.padding(vertical = 14.dp), color = MaterialTheme.colorScheme.outlineVariant)
         CalibrationSteps(
-            cal = cal, started = started, reachable = reachable,
-            onStart = { started = true; vm.startCalibration() },
-            onClose = { started = false; vm.stopCalibration() },
+            session = session, reachable = reachable,
+            onStart = vm::startCalibration,
+            onClose = vm::stopCalibration,
         )
     }
 }

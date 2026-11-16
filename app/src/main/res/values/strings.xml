@@ -101,6 +101,7 @@
     <string name="station_hint">Every phone shows this name.</string>
     <string name="station_save">Save</string>
     <string name="station_needs_wifi">To change the name, connect to the sensor\'s Wi-Fi.</string>
+    <string name="station_failed">Couldn\'t save the name. Try again near the sensor.</string>
     <string name="sensor_care">Sensor care</string>
     <string name="cal_today">Calibrated today</string>
     <plurals name="cal_days_ago">
@@ -125,7 +126,6 @@
     <string name="cal_out_of_range">Is the sensor in the water?</string>
     <string name="cal_failed">That didn\'t work. Try again.</string>
     <string name="cal_expired">Took too long — try again</string>
-    <string name="cal_cancel">Cancel</string>
     <string name="cal_close">Close</string>
     <string name="cal_try_again">Try again</string>
     <string name="cal_needs_wifi">Calibration needs the sensor\'s Wi-Fi</string>
