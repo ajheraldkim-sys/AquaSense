@@ -315,3 +315,45 @@
 - [ ] **Step 2: Verify on emulator** (screenshots): Now shows state ≤ 1 s after launch and updates each second; `cloudy` → red within 1 s, notification at ~30 s; back to `clear` → alert closes after 10 min (use a debug time scale or verify via unit tests); `unplugged`/`stale` → "Sensor not working"; `v2` → live works, no crash; restart mock (new boot id) → History backfilled, no duplicates; calibration happy path and dirty-water rejection; language switch updates text without restart.
 - [ ] **Step 3: Verify firmware** `bash firmware/test/run_tests.sh` and `arduino-cli compile …` once more.
 - [ ] **Step 4: Commit** `docs: v3 README, mock ESP`.
+
+---
+
+### Task 13: Firmware BLE live channel (added 2026-11-16, see spec addendum)
+
+**Files:**
+- Modify: `firmware/AquaSense_ESP32/AquaSense_ESP32.ino`; docs in its header comment
+- Modify: `firmware/test/run_tests.sh` only if needed (core unchanged)
+
+**Interfaces:**
+- Produces (BLE GATT): device name `AquaSense-ESP32`; service UUID `6e1a0001-6a3b-4c2d-9f10-a9a5e0c0a5e1`; characteristic UUID `6e1a0002-6a3b-4c2d-9f10-a9a5e0c0a5e1` (READ | NOTIFY, with CCCD 0x2902); value = the exact `/readings` JSON (same builder function as the HTTP handler), set + notified once per second.
+- Compile/upload FQBN changes to `esp32:esp32:esp32:PartitionScheme=huge_app`.
+
+- [ ] **Step 1: Implement** using the core's bundled `BLE` library: init in `setup()` after Wi-Fi AP; server callbacks restart advertising on connect and disconnect; refactor the `/readings` JSON into `const char* buildReadingsJson()` used by both HTTP and BLE; update once per second from `onSecond()`; set BLE MTU-friendly behaviour (value ≤ 512 B; Android requests MTU 247; JSON is ~230 B). Nothing may block loop() (watchdog 30 s).
+- [ ] **Step 2: Verify** `bash firmware/test/run_tests.sh` → ALL PASSED; `arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=huge_app firmware/AquaSense_ESP32` → success, report flash/RAM %.
+- [ ] **Step 3: Commit** `feat(fw): BLE live channel`.
+
+---
+
+### Task 14: App BLE fallback
+
+**Files:**
+- Create: `app/src/main/java/com/magosilom/aquasense/BleClient.kt`
+- Create: `app/src/main/java/com/magosilom/aquasense/TransportPolicy.kt`
+- Test: `app/src/test/java/com/magosilom/aquasense/TransportPolicyTest.kt`
+- Modify: `AppViewModel.kt`, `AndroidManifest.xml`, `MainActivity.kt` (one-time permission request)
+
+**Interfaces:**
+- Consumes: `parseReadings` (Task 5), VM loop (Task 9).
+- Produces:
+  - `const val BLE_SERVICE = "6e1a0001-6a3b-4c2d-9f10-a9a5e0c0a5e1"`, `const val BLE_READING = "6e1a0002-6a3b-4c2d-9f10-a9a5e0c0a5e1"`
+  - `class BleClient(ctx: Context) { val latest: StateFlow<Pair<LiveReading, Long>?>; val connected: StateFlow<Boolean>; fun start(); fun stop(); val supported: Boolean }` — scan filtered by service UUID, connect GATT, request MTU 247, enable notifications (write CCCD), parse each notification with `parseReadings`; reconnect with backoff; no-op without permissions or with Bluetooth off.
+  - `enum class Transport { WIFI, BLE }`; `fun chooseTransport(current: Transport, lastWifiOkMs: Long?, nowMs: Long, bleAvailable: Boolean): Transport` — WIFI if a Wi-Fi reading succeeded within 10_000 ms or BLE unavailable; else BLE.
+  - VM: Wi-Fi polling continues every 1 s regardless; when `chooseTransport` is BLE, the screen is fed from `BleClient.latest` (same `screenFor`/AlertEngine path); BLE client started only while transport is BLE (or after 10 s of Wi-Fi failure), stopped in background.
+  - `val transport: StateFlow<Transport>` exposed for Settings → Sensor care ("via Bluetooth").
+  - Manifest: `BLUETOOTH_SCAN` (`usesPermissionFlags="neverForLocation"`), `BLUETOOTH_CONNECT`, `BLUETOOTH`/`BLUETOOTH_ADMIN` (`maxSdkVersion="30"`), `ACCESS_FINE_LOCATION` (`maxSdkVersion="30"`), `<uses-feature android:name="android.hardware.bluetooth_le" android:required="false"/>`.
+
+- [ ] **Step 1: Write failing tests** `TransportPolicyTest`: `wifiFreshStaysWifi` (ok 9_999 ms ago → WIFI); `wifiStaleGoesBle` (10_001 ms → BLE when available); `bleUnavailableStaysWifi`; `neverConnectedGoesBleAfter10s` (lastWifiOkMs null and app start ≥ 10 s ago → BLE — pass app-start time as lastWifiOkMs initial value).
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** tests + `assembleDebug` → PASS.
+- [ ] **Step 5: Commit** `feat(app): automatic BLE fallback for live readings`.
+
+Order of execution after Task 11: Task 13 → Task 14 → Task 12 (Task 12's end-to-end check also covers BLE on the real phone + ESP32, and README documents the huge_app partition scheme and BLE).

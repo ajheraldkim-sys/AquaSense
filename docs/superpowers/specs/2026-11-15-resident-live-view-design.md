@@ -213,3 +213,25 @@ not.
 - After a night with no phones present, History shows the whole night the next morning.
 - The caretaker recalibrates in the field with only a phone and a press of the box's button. A
   calibration in cloudy water is refused.
+
+## Addendum (2026-11-16): Bluetooth fallback
+
+Context: an external tool started a manual "Connect" screen (Wi-Fi scan + passwords, Bluetooth Classic
+scan/pair) and BluetoothSerial on the ESP32. The user chose to make Bluetooth a proper part of v3 and asked
+to implement without further questions; these are the controller's calls (work kept in git stash@{0}).
+
+- **Transport:** Bluetooth Low Energy (no pairing, no PIN), not Classic SPP — residents must not pair.
+- **Automatic fallback, live readings only:** the app uses Wi-Fi first; if no successful Wi-Fi reading for
+  10 s, it reads live values over BLE; while on BLE it keeps trying Wi-Fi and switches back as soon as a Wi-Fi
+  reading succeeds. History import, time sync, station name and calibration stay Wi-Fi-only.
+- Residents see the same screen; no transport wording on the main screen (a small "via Bluetooth" line may
+  appear only in Settings → Sensor care).
+- **ESP32:** BLE peripheral advertising as `AquaSense-ESP32` with one custom service and one characteristic
+  (read + notify) carrying exactly the `/readings` JSON, updated every 1 s; advertising restarts after each
+  connect/disconnect so several phones can connect (BLE allows only a few at once — Wi-Fi remains primary).
+- **Partition scheme:** `huge_app` (3 MB app / 896 KB data) — BLE does not fit the default 1.2 MB app slot.
+  Switching partitions wipes the minute log once.
+- **Android:** one-time runtime permission — API 31+: BLUETOOTH_SCAN (neverForLocation) + BLUETOOTH_CONNECT;
+  API 26–30: BLUETOOTH, BLUETOOTH_ADMIN + ACCESS_FINE_LOCATION. If denied or Bluetooth is off, the app simply
+  stays Wi-Fi-only (no nagging on the residents' screen).
+- Out of scope: manual device lists, Wi-Fi password entry, Bluetooth Classic.
