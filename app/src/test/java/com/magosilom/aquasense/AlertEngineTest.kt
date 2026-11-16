@@ -87,6 +87,41 @@ class AlertEngineTest {
         val now = 100_000_000L
         e.onImported(Point(0, 8.0), 5.0, now)
         for (m in 1..9) assertNull(e.onImported(Point(m * 60_000L, 1.0), 5.0, now))
-        assertEquals(AlertEvent.Closed(660_000), e.onImported(Point(660_000, 1.0), 5.0, now).also { })
+        assertEquals(AlertEvent.Closed(660_000), e.onImported(Point(660_000, 1.0), 5.0, now))
+    }
+
+    @Test fun importAfterLiveIgnored() {
+        val e = AlertEngine()
+        val now = 100_000_000L
+        e.onLive(8.0, 5.0, now); e.onLive(8.0, 5.0, now + 30_000)
+        for (m in 0..12) assertNull(e.onImported(Point(now - 900_000 + m * 60_000L, 1.0), 5.0, now))
+        assertNull(e.onLive(1.0, 5.0, now + 40_000))
+        assertNull(e.onLive(8.0, 5.0, now + 50_000))
+        assertNull(e.onLive(8.0, 5.0, now + 100_000))
+        assertTrue(e.isOpen)
+    }
+
+    @Test fun importedClearDoesNotResetLiveRun() {
+        val e = AlertEngine()
+        val now = 100_000_000L
+        e.onLive(8.0, 5.0, now)
+        assertNull(e.onImported(Point(now - 60_000, 1.0), 5.0, now))
+        assertEquals(AlertEvent.Opened(now + 30_000, 8.0, true), e.onLive(8.0, 5.0, now + 30_000))
+    }
+
+    @Test fun importedJustOver1hNoNotify() {
+        val e = AlertEngine()
+        val now = 10_000_000L
+        assertEquals(AlertEvent.Opened(now - 3_600_001, 8.0, false), e.onImported(Point(now - 3_600_001, 8.0), 5.0, now))
+    }
+
+    @Test fun reopenAfterClose() {
+        val e = AlertEngine()
+        e.onLive(8.0, 5.0, 0); e.onLive(8.0, 5.0, 30_000)
+        e.onLive(1.0, 5.0, 40_000)
+        assertTrue(e.onLive(1.0, 5.0, 640_000) is AlertEvent.Closed)
+        assertNull(e.onLive(8.0, 5.0, 650_000))
+        assertNull(e.onLive(8.0, 5.0, 679_999))
+        assertTrue(e.onLive(8.0, 5.0, 680_000) is AlertEvent.Opened)
     }
 }

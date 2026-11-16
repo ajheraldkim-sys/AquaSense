@@ -16,9 +16,12 @@ class AlertEngine(
     private var runStart: Long? = null
     private var peak = 0.0
     private var clearStart: Long? = null
+    private var lastT = Long.MIN_VALUE
 
-    fun onLive(ntu: Double?, limit: Double, nowMs: Long): AlertEvent? {
+    fun onLive(ntu: Double?, limit: Double, rawNowMs: Long): AlertEvent? {
         if (ntu == null) return null
+        val nowMs = maxOf(rawNowMs, lastT)
+        lastT = nowMs
         if (ntu > limit) {
             clearStart = null
             val start = runStart ?: nowMs.also { runStart = it; peak = ntu }
@@ -33,8 +36,14 @@ class AlertEngine(
         return clearStep(nowMs)
     }
 
-    /** Historical minute points, oldest to newest. One above-limit minute opens immediately. */
+    /**
+     * Historical minute points. Must arrive oldest to newest and before live samples for the
+     * same period; points not newer than the latest sample already seen are ignored.
+     * One above-limit minute opens immediately.
+     */
     fun onImported(p: Point, limit: Double, nowMs: Long): AlertEvent? {
+        if (p.tsMs <= lastT) return null
+        lastT = p.tsMs
         if (p.ntu > limit) {
             clearStart = null
             if (isOpen) return null

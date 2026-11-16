@@ -9,6 +9,7 @@ class StatusTest {
 
     @Test fun waterStateThresholds() {
         assertEquals(WaterState.CLEAR, waterState(3.9, 5.0))
+        assertEquals(WaterState.CLEAR, waterState(4.0, 5.0))
         assertEquals(WaterState.GETTING_CLOUDY, waterState(4.1, 5.0))
         assertEquals(WaterState.GETTING_CLOUDY, waterState(5.0, 5.0))
         assertEquals(WaterState.CLOUDY, waterState(5.01, 5.0))
