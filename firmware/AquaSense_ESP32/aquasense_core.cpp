@@ -166,8 +166,8 @@ int LogRing::since(uint32_t seq, LogEntry* out, int max) const {
 // ---- Calibration -----------------------------------------------------------
 CalCheck checkCalibration(float candidateV, float spreadV, float currentClearV) {
   if (!std::isfinite(currentClearV) || currentClearV <= 0.0f) currentClearV = 4.20f;
-  if (!std::isfinite(candidateV) || candidateV < 0.5f || candidateV > 4.9f) return CAL_OUT_OF_RANGE;
-  if (!(spreadV <= 0.10f)) return CAL_UNSTABLE;  // NaN spread counts as unstable
+  if (!std::isfinite(candidateV) || candidateV < 0.10f || candidateV > 4.95f) return CAL_OUT_OF_RANGE;
+  if (!(spreadV <= 0.35f)) return CAL_UNSTABLE;  // NaN spread counts as unstable
   return CAL_OK;
 }
 
@@ -187,7 +187,7 @@ int CalSession::secondsStable() const {
   for (int i = n_ - 1; i >= 0; i--) {
     lo = std::min(lo, w_[i]);
     hi = std::max(hi, w_[i]);
-    if (hi - lo > 0.08f) break;
+    if (hi - lo > 0.35f) break;
     count++;
   }
   return count > WINDOW ? WINDOW : count;

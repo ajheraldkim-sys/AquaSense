@@ -178,6 +178,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _calSession.value = CalUiSession.startFailed()
                 return@launch
             }
+            _calSession.value = calSessionStep(
+                _calSession.value,
+                CalStatus(CalPhase.SETTLING, null, null, 0, null),
+                System.currentTimeMillis()
+            )
+            delay(300L)
             while (isActive) {
                 val onBleNow = _transport.value == Transport.BLE && ble.connected.value
                 val s = if (onBleNow) {

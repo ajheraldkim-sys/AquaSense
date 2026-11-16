@@ -262,22 +262,17 @@ float steadyHighMax = 0.0f;
 void takeSample() {
   float v = readSensorVolts(TURB_PIN, TURB_DIVIDER);
   lastVolts = v;
-  if (v < 0.3) {              // floating / unplugged input reads near 0 V
+  if (v < 0.10f) {            // floating / unplugged input reads near 0 V
     rolling.push(NAN);        // ignored by the window ...
     rolling.clear();          // ... so drop old values: serve null, never a stale number
     steadyHighCount = 0;
     return;
   }
-  // Clear the 1.214 V artifact from multi-pin test boot if present
-  if (!hasGoodSample && calV > 1.18f && calV < 1.25f && v < 1.05f) {
-    calV = 0.808f;
-    prefs.putFloat("cal_v", calV);
-  }
-  // Initialize baseline at boot if uncalibrated, or recover if clean water is steadier & higher than a stale low calV
-  if (!hasGoodSample && v >= 0.5f && v <= 4.30f && (calEpoch == 0 && !prefs.isKey("cal_v") || v > calV + 0.08f)) {
+  // Reset baseline on first boot sample if current reading is lower/higher than a stale uncalibrated calV
+  if (!hasGoodSample && v >= 0.15f && v <= 4.50f && (calEpoch == 0 || v > calV + 0.06f)) {
     calV = v;
     prefs.putFloat("cal_v", calV);
-  } else if (v > calV + 0.03f && v <= 4.30f) {
+  } else if (v > calV + 0.03f && v <= 4.50f) {
     if (steadyHighCount == 0) {
       steadyHighMin = v;
       steadyHighMax = v;
@@ -348,7 +343,9 @@ void onCalibrationDone() {
   calUptimePending = up;
   prefs.putFloat("cal_v", calV);
   prefs.putUInt("cal_epoch", calEpoch);
+  steadyHighCount = 0;
   rolling.clear();            // old samples used the previous calibration
+  rolling.push(0.0f);         // immediately reflect 0.00 NTU in clean calibrated water
   appendLog(calV, 1);
   notifyBleCal();
   notifyBleReadings();
@@ -533,7 +530,7 @@ void loadSettings() {
   prefs.putUShort("boot", bootId);
 
   float v = prefs.getFloat("cal_v", NAN);
-  calV = (isfinite(v) && v >= 0.5f && v <= 4.9f) ? v : TURB_CLEAR_VOLTS;
+  calV = (isfinite(v) && v >= 0.10f && v <= 4.95f) ? v : TURB_CLEAR_VOLTS;
   calEpoch = prefs.getUInt("cal_epoch", 0);
 
   setStation(prefs.getString("station", DEFAULT_STATION));

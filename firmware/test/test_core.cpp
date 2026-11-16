@@ -249,11 +249,12 @@ static void test_calCandidateInitiallyNan() {
 
 // ---- Calibration -----------------------------------------------------------
 static void test_checkOrder() {
-  CHECK(checkCalibration(0.3f, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
+  CHECK(checkCalibration(0.05f, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
   CHECK(checkCalibration(5.0f, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
   CHECK(checkCalibration(NAN_F, 0.0f, 4.2f) == CAL_OUT_OF_RANGE);
-  CHECK(checkCalibration(4.15f, 0.15f, 4.2f) == CAL_UNSTABLE);
+  CHECK(checkCalibration(4.15f, 0.40f, 4.2f) == CAL_UNSTABLE);
   CHECK(checkCalibration(4.15f, 0.01f, 4.2f) == CAL_OK);
+  CHECK(checkCalibration(0.46f, 0.01f, 4.2f) == CAL_OK);  // low voltage divider range allowed
   CHECK(checkCalibration(1.11f, 0.01f, 4.2f) == CAL_OK);  // voltage divider range allowed
   CHECK(checkCalibration(4.5f, 0.01f, 4.2f) == CAL_OK);   // higher is allowed
   CHECK(checkCalibration(4.15f, 0.0f, 0.0f) == CAL_OK);
