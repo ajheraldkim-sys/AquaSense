@@ -1,9 +1,12 @@
 package com.magosilom.aquasense
 
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.text.format.DateFormat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -166,22 +170,69 @@ fun NowScreen(vm: AppViewModel) {
 }
 
 @Composable
+private fun clarityTitle(c: ClarityLevel): String = stringResource(
+    when (c) {
+        ClarityLevel.EXCELLENT -> R.string.clarity_excellent
+        ClarityLevel.GOOD -> R.string.clarity_good
+        ClarityLevel.FAIR -> R.string.clarity_fair
+        ClarityLevel.POOR -> R.string.clarity_poor
+        ClarityLevel.VERY_POOR -> R.string.clarity_very_poor
+    }
+)
+
+@Composable
+private fun clarityDesc(c: ClarityLevel): String = stringResource(
+    when (c) {
+        ClarityLevel.EXCELLENT -> R.string.clarity_desc_excellent
+        ClarityLevel.GOOD -> R.string.clarity_desc_good
+        ClarityLevel.FAIR -> R.string.clarity_desc_fair
+        ClarityLevel.POOR -> R.string.clarity_desc_poor
+        ClarityLevel.VERY_POOR -> R.string.clarity_desc_very_poor
+    }
+)
+
+@Composable
 private fun LiveStatus(s: Screen.Live) {
-    StatusOrb(s.state, pulsing = true)
-    Text(stateText(s.state), fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 36.sp,
-        textAlign = TextAlign.Center, color = if (s.state == WaterState.CLOUDY) Red else MaterialTheme.colorScheme.onBackground)
+    val clarity = clarityLevel(s.ntu)
+    StatusOrb(s.state, pulsing = true, clarity = clarity)
+    Caption(stringResource(R.string.clarity_header))
     Text(
-        if (s.state == WaterState.GETTING_CLOUDY) stringResource(R.string.sub_check_soon)
-        else stringResource(R.string.sub_cloudiness, plainNumber(s.ntu), plainNumber(s.limit)),
-        fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center
+        clarityTitle(clarity),
+        fontSize = 30.sp,
+        fontWeight = FontWeight.Bold,
+        lineHeight = 36.sp,
+        textAlign = TextAlign.Center,
+        color = clarityColor(clarity)
     )
-    TurbidityBar(s.ntu, s.limit, s.state, stringResource(R.string.state_clear), stringResource(R.string.word_cloudy),
-        Modifier.fillMaxWidth())
+    Text(
+        clarityDesc(clarity),
+        fontSize = 14.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center
+    )
+    TurbidityBar(
+        s.ntu, s.limit, s.state,
+        stringResource(R.string.clarity_excellent),
+        stringResource(R.string.clarity_very_poor),
+        Modifier.fillMaxWidth()
+    )
     LiveLine(s.updatedAtMs)
-    if (s.state == WaterState.CLOUDY) {
-        Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small, color = Red.copy(alpha = 0.12f)) {
-            Text(stringResource(R.string.tip_cloudy), Modifier.padding(14.dp), fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center)
+    if (s.ntu > s.limit) {
+        Surface(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small, color = Red.copy(alpha = 0.14f)) {
+            Column(Modifier.padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    stringResource(R.string.pnsdw_warning_title),
+                    fontWeight = FontWeight.Bold,
+                    color = Red,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.pnsdw_warning_body, f1(s.ntu), plainNumber(s.limit)),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }
@@ -221,8 +272,17 @@ private fun DayChart(history: List<Point>, limit: Double) {
         Text(stringResource(R.string.last_24h), fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
         TrendChart(values, null, limit, stringResource(R.string.chart_empty), height = 100.dp)
-        if (values.size >= 2) Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-            Caption(stringResource(R.string.chart_start)); Spacer(Modifier.weight(1f)); Caption(stringResource(R.string.chart_now))
+        if (values.size >= 2) {
+            val firstTs = history.firstOrNull()?.tsMs
+            val lastTs = history.lastOrNull()?.tsMs
+            val startLabel = if (firstTs != null && lastTs != null && lastTs - firstTs < 23 * 3_600_000L) {
+                clockText(firstTs)
+            } else {
+                stringResource(R.string.chart_start)
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                Caption(startLabel); Spacer(Modifier.weight(1f)); Caption(stringResource(R.string.chart_now))
+            }
         }
     }
 }
@@ -448,15 +508,16 @@ fun HistoryScreen(vm: AppViewModel) {
 @Composable
 private fun DayRow(d: DaySummary) {
     val ctx = LocalContext.current
+    val dayClarity = if (d.worst == WaterState.CLOUDY) ClarityLevel.FAIR else clarityLevel(d.avgNtu)
     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Dot(stateColor(d.worst), 12.dp)
+        Dot(clarityColor(dayClarity), 12.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(dayLabel(ctx, d.dayStartMs), fontWeight = FontWeight.SemiBold)
-            Text(daySummaryText(ctx, d), fontSize = 14.sp)
+            Text("${clarityTitle(clarityLevel(d.avgNtu))} · ${daySummaryText(ctx, d)}", fontSize = 14.sp)
         }
         Spacer(Modifier.width(8.dp))
-        Caption(stringResource(R.string.day_average, f1(d.avgNtu)))
+        Caption("${f1(d.avgNtu)} NTU")
     }
 }
 
@@ -534,6 +595,8 @@ fun SettingsScreen(vm: AppViewModel) {
 
         SensorCare(vm, reachable)
 
+        ConnectionsPanel(vm)
+
         Panel(Modifier.fillMaxWidth().clickable { showAbout = true }) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Info, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -553,8 +616,12 @@ private fun SensorCare(vm: AppViewModel, reachable: Boolean) {
     val lastCalMs by vm.lastCalMs.collectAsState()
     val needsCleaning by vm.needsCleaning.collectAsState()
     val screen by vm.screen.collectAsState()
+    val transport by vm.transport.collectAsState()
     Panel(Modifier.fillMaxWidth()) {
         SectionTitle(stringResource(R.string.sensor_care))
+        if (transport == Transport.BLE && screen is Screen.Live) {
+            Caption(stringResource(R.string.via_bluetooth))
+        }
         Spacer(Modifier.height(8.dp))
         // One calendar-day count drives both the label and the reminder.
         val ago = lastCalMs?.let { ChronoUnit.DAYS.between(localDate(it), LocalDate.now()).toInt().coerceAtLeast(0) }
@@ -590,6 +657,179 @@ private fun SensorCare(vm: AppViewModel, reachable: Boolean) {
             session = session, reachable = reachable,
             onStart = vm::startCalibration,
             onClose = vm::stopCalibration,
+        )
+    }
+}
+
+/** Interactive Wi-Fi & Bluetooth scanning, pairing, and connecting panel. */
+@Composable
+private fun ConnectionsPanel(vm: AppViewModel) {
+    val wifiScanning by vm.joiner.scanning.collectAsState()
+    val wifiNetworks by vm.joiner.networks.collectAsState()
+    val connectedSsid by vm.joiner.connectedSsid.collectAsState()
+
+    val btScanning by vm.ble.scanningDevices.collectAsState()
+    val btDevices by vm.ble.devices.collectAsState()
+    val connectedBt by vm.ble.connectedDevice.collectAsState()
+
+    var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.any { it }) pendingAction?.invoke()
+        pendingAction = null
+    }
+    val enableBtLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (vm.ble.isBluetoothEnabled()) vm.ble.scanDevices()
+    }
+
+    var wifiPromptTarget by remember { mutableStateOf<ScannedWifi?>(null) }
+
+    Panel(Modifier.fillMaxWidth()) {
+        SectionTitle(stringResource(R.string.conn_title))
+        Spacer(Modifier.height(8.dp))
+
+        // ---- Wi-Fi Scan & Connect
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = {
+                    pendingAction = { vm.joiner.scan() }
+                    permLauncher.launch(blePermissionsForRuntime())
+                },
+                modifier = Modifier.weight(1f),
+                enabled = !wifiScanning
+            ) {
+                Text(stringResource(if (wifiScanning) R.string.conn_scanning else R.string.conn_scan_wifi))
+            }
+            OutlinedButton(
+                onClick = {
+                    if (btScanning) {
+                        vm.ble.stopDeviceScan()
+                    } else {
+                        pendingAction = {
+                            if (!vm.ble.isBluetoothEnabled()) {
+                                try {
+                                    enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                                } catch (_: Exception) {}
+                            } else {
+                                vm.ble.scanDevices()
+                            }
+                        }
+                        permLauncher.launch(blePermissionsForRuntime())
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(stringResource(if (btScanning) R.string.conn_stop_scan else R.string.conn_scan_bt))
+            }
+        }
+
+        if (wifiNetworks.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            wifiNetworks.take(8).forEach { net ->
+                val isConn = connectedSsid == net.ssid
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Dot(if (isConn) Blue else if (net.isAquaSense) Amber else Grey, 8.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(net.ssid, fontWeight = if (net.isAquaSense) FontWeight.Bold else FontWeight.Medium, fontSize = 14.sp)
+                        Caption("${net.rssi} dBm" + if (isConn) " · " + stringResource(R.string.conn_connected) else "")
+                    }
+                    if (isConn) {
+                        TextButton({ vm.joiner.stop() }) { Text(stringResource(R.string.conn_disconnect), fontSize = 12.sp) }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (net.secured) wifiPromptTarget = net
+                                else vm.joiner.connectTo(net.ssid, null)
+                            }
+                        ) {
+                            Text(stringResource(R.string.conn_connect), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (btDevices.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(6.dp))
+            btDevices.take(8).forEach { dev ->
+                val isConn = connectedBt?.address == dev.address
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Dot(if (isConn) Blue else if (dev.isPaired) Amber else Grey, 8.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(dev.name, fontWeight = if (dev.isAquaSense) FontWeight.Bold else FontWeight.Medium, fontSize = 14.sp)
+                        val bondTxt = when {
+                            isConn -> stringResource(R.string.conn_connected)
+                            dev.isPairing -> stringResource(R.string.conn_pairing)
+                            dev.isPaired -> stringResource(R.string.conn_paired)
+                            else -> dev.address
+                        }
+                        Caption(bondTxt)
+                    }
+                    if (!dev.isPaired) {
+                        TextButton(
+                            onClick = { vm.ble.pairDevice(dev.address) },
+                            enabled = !dev.isPairing
+                        ) {
+                            Text(stringResource(if (dev.isPairing) R.string.conn_pairing else R.string.conn_pair), fontSize = 12.sp)
+                        }
+                    } else if (!isConn) {
+                        TextButton(onClick = { vm.ble.unpairDevice(dev.address) }) {
+                            Text(stringResource(R.string.conn_unpair), fontSize = 12.sp, color = Grey)
+                        }
+                    }
+                    if (isConn) {
+                        OutlinedButton(onClick = { vm.ble.stop() }) {
+                            Text(stringResource(R.string.conn_disconnect), fontSize = 12.sp)
+                        }
+                    } else {
+                        Button(onClick = { vm.ble.connectToDevice(dev.address) }) {
+                            Text(stringResource(R.string.conn_connect), fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    wifiPromptTarget?.let { target ->
+        var pass by remember(target) {
+            mutableStateOf(if (target.ssid == AQUASENSE_SSID) AQUASENSE_PASS else "")
+        }
+        AlertDialog(
+            onDismissRequest = { wifiPromptTarget = null },
+            title = { Text(target.ssid) },
+            text = {
+                OutlinedTextField(
+                    value = pass,
+                    onValueChange = { pass = it },
+                    label = { Text(stringResource(R.string.conn_password)) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+            },
+            confirmButton = {
+                Button({
+                    val s = target.ssid
+                    wifiPromptTarget = null
+                    vm.joiner.connectTo(s, pass)
+                }) { Text(stringResource(R.string.conn_connect)) }
+            },
+            dismissButton = {
+                TextButton({ wifiPromptTarget = null }) { Text(stringResource(R.string.conn_cancel)) }
+            }
         )
     }
 }

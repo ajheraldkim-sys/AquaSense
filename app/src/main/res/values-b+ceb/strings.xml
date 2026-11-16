@@ -108,6 +108,22 @@
     <string name="cal_never">Wala pa ma-calibrate</string>
     <string name="cal_reminder">I-calibrate ang sensor matag 30 ka adlaw. Panahon na karon.</string>
     <string name="sensor_ok">Mogana ang sensor</string>
+    <string name="via_bluetooth">pinaagi sa Bluetooth</string>
+    <string name="conn_title">Wi-Fi ug Bluetooth</string>
+    <string name="conn_scan_wifi">I-scan ang Wi-Fi</string>
+    <string name="conn_scanning">Nag-scan…</string>
+    <string name="conn_scan_bt">I-scan ang Bluetooth</string>
+    <string name="conn_stop_scan">Undanga ang scan</string>
+    <string name="conn_connect">Konektar</string>
+    <string name="conn_disconnect">Idiskonektar</string>
+    <string name="conn_connected">Konektado</string>
+    <string name="conn_pair">Ipares</string>
+    <string name="conn_unpair">Kuhaa ang pares</string>
+    <string name="conn_paired">Napares na</string>
+    <string name="conn_pairing">Nagpares…</string>
+    <string name="conn_password">Password sa Wi-Fi</string>
+    <string name="conn_cancel">Kanselahon</string>
+    <string name="conn_turn_on_bt">Ablihi ang Bluetooth</string>
     <string name="cal_step1">Ibutang ang sensor sa limpyo nga bottled water</string>
     <string name="cal_start">Sugdi</string>
     <string name="cal_starting">Nagsugod…</string>
@@ -126,4 +142,22 @@
     <string name="cal_close">Isira</string>
     <string name="cal_try_again">Sulayi pag-usab</string>
     <string name="cal_needs_wifi">Kinahanglan ang Wi-Fi sa sensor aron ma-calibrate</string>
+
+    <!-- 5-Level Water Clarity Classification & PNSDW 2017 / WHO Standards -->
+    <string name="clarity_header">Klasipikasyon sa Kalinaw sa Tubig</string>
+    <string name="clarity_excellent">Maayo Kaayo (Excellent)</string>
+    <string name="clarity_good">Maayo (Good)</string>
+    <string name="clarity_fair">Kasarangan (Fair)</string>
+    <string name="clarity_poor">Lubog (Poor)</string>
+    <string name="clarity_very_poor">Lubog Kaayo (Very Poor)</string>
+    <string name="clarity_desc_excellent">Tin-aw kaayo nga tubig (0–1 NTU) · Pasado sa WHO target (&lt; 1 NTU) ug PNSDW limit (≤ 5 NTU)</string>
+    <string name="clarity_desc_good">Medyo lubog (&gt;1–5 NTU) · Madawat nga lebel (PNSDW ≤ 5 NTU), apan bantayi</string>
+    <string name="clarity_desc_fair">Mamatikdan nga kalubog (&gt;5–20 NTU) · Lapas sa 5 NTU nga limitasyon sa Pilipinas</string>
+    <string name="clarity_desc_poor">Taas nga kalubog (&gt;20–50 NTU) · Lapas sa 5 NTU nga limitasyon sa Pilipinas</string>
+    <string name="clarity_desc_very_poor">Grabe ka lubog (&gt;50 NTU) · Lapas sa 5 NTU nga limitasyon sa Pilipinas</string>
+    <string name="pnsdw_warning_title">Lapas sa Limitasyon sa Mainom nga Tubig sa Pilipinas (5 NTU)</string>
+    <string name="pnsdw_warning_body">Ang sukod (%1$s NTU) lapas sa PNSDW 2017 maximum allowable turbidity nga %2$s NTU. Gamita ang tinipigan o gipabukalan nga tubig ug ipasusi sa laboratoryo.</string>
+    <string name="pnsdw_standard_note">Philippine National Standards for Drinking Water (PNSDW 2017): Ang kinatas-ang gitugotan nga turbidity kay 5 NTU (DOH). Girekomenda sa WHO ang ubos sa 1 NTU. Ang turbidity lang dili makatino kung mahimo bang imnon ang tubig; gikinahanglan gihapon ang microbiological ug chemical testing.</string>
+    <string name="ntu_reading_fmt">%1$s NTU</string>
+    <string name="pnsdw_limit_label">PNSDW limit: %1$s NTU · WHO target: &lt; 1 NTU</string>
 </resources>

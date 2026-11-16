@@ -108,6 +108,22 @@
     <string name="cal_never">Hindi pa na-calibrate</string>
     <string name="cal_reminder">I-calibrate ang sensor tuwing 30 araw. Oras na ngayon.</string>
     <string name="sensor_ok">Gumagana ang sensor</string>
+    <string name="via_bluetooth">sa pamamagitan ng Bluetooth</string>
+    <string name="conn_title">Wi-Fi at Bluetooth</string>
+    <string name="conn_scan_wifi">Mag-scan ng Wi-Fi</string>
+    <string name="conn_scanning">Nag-i-scan…</string>
+    <string name="conn_scan_bt">Mag-scan ng Bluetooth</string>
+    <string name="conn_stop_scan">Ihinto ang scan</string>
+    <string name="conn_connect">Kumonekta</string>
+    <string name="conn_disconnect">Idiskonekta</string>
+    <string name="conn_connected">Konektado</string>
+    <string name="conn_pair">Ipares</string>
+    <string name="conn_unpair">Alisin ang pares</string>
+    <string name="conn_paired">Nakapares</string>
+    <string name="conn_pairing">Nagpapares…</string>
+    <string name="conn_password">Password ng Wi-Fi</string>
+    <string name="conn_cancel">Kanselahin</string>
+    <string name="conn_turn_on_bt">Buksan ang Bluetooth</string>
     <string name="cal_step1">Ilagay ang sensor sa malinis na bottled water</string>
     <string name="cal_start">Simulan</string>
     <string name="cal_starting">Sinisimulan…</string>
@@ -126,4 +142,22 @@
     <string name="cal_close">Isara</string>
     <string name="cal_try_again">Subukan ulit</string>
     <string name="cal_needs_wifi">Kailangan ng Wi-Fi ng sensor para mag-calibrate</string>
+
+    <!-- 5-Level Water Clarity Classification & PNSDW 2017 / WHO Standards -->
+    <string name="clarity_header">Klasipikasyon ng Linaw ng Tubig</string>
+    <string name="clarity_excellent">Napakalinaw (Excellent)</string>
+    <string name="clarity_good">Maayos (Good)</string>
+    <string name="clarity_fair">Katamtaman (Fair)</string>
+    <string name="clarity_poor">Malabo (Poor)</string>
+    <string name="clarity_very_poor">Napakalabo (Very Poor)</string>
+    <string name="clarity_desc_excellent">Napakalinaw na tubig (0–1 NTU) · Pasok sa WHO target (&lt; 1 NTU) at PNSDW limit (≤ 5 NTU)</string>
+    <string name="clarity_desc_good">Bahagyang malabo (&gt;1–5 NTU) · Katanggap-tanggap na antas (PNSDW ≤ 5 NTU), ngunit bantayan</string>
+    <string name="clarity_desc_fair">Kapansin-pansing labo (&gt;5–20 NTU) · Lampas sa 5 NTU na limitasyon sa Pilipinas</string>
+    <string name="clarity_desc_poor">Mataas ang labo (&gt;20–50 NTU) · Lampas sa 5 NTU na limitasyon sa Pilipinas</string>
+    <string name="clarity_desc_very_poor">Sobrang labo (&gt;50 NTU) · Lampas sa 5 NTU na limitasyon sa Pilipinas</string>
+    <string name="pnsdw_warning_title">Lampas sa Limitasyon ng Inuming Tubig sa Pilipinas (5 NTU)</string>
+    <string name="pnsdw_warning_body">Ang sukat (%1$s NTU) ay lampas sa PNSDW 2017 maximum allowable turbidity na %2$s NTU. Gumamit ng nakaimbak o pinakuluang tubig at magpasuri sa laboratoryo.</string>
+    <string name="pnsdw_standard_note">Philippine National Standards for Drinking Water (PNSDW 2017): Ang pinakamataas na pinapayagang turbidity ay 5 NTU (DOH). Inirerekomenda ng WHO ang mas mababa sa 1 NTU. Ang turbidity lamang ay hindi makapagsasabi kung puwedeng inumin ang tubig; kailangan pa rin ang microbiological at chemical testing.</string>
+    <string name="ntu_reading_fmt">%1$s NTU</string>
+    <string name="pnsdw_limit_label">PNSDW limit: %1$s NTU · WHO target: &lt; 1 NTU</string>
 </resources>

@@ -66,6 +66,10 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
@@ -73,9 +77,13 @@
 #include "aquasense_core.h"
 #include "flash_store.h"
 
-// ---------------- WI-FI ACCESS POINT CONFIG -----------------
+// ---------------- WI-FI & BLE CONFIG -------------------------
 const char* AP_SSID = "AquaSense-ESP32";
 const char* AP_PASS = "aquasense123";   // At least 8 characters. Change it for field use!
+const char* BLE_SERVICE_UUID = "6e1a0001-6a3b-4c2d-9f10-a9a5e0c0a5e1";
+const char* BLE_READING_UUID = "6e1a0002-6a3b-4c2d-9f10-a9a5e0c0a5e1";
+const char* BLE_CAL_UUID     = "6e1a0003-6a3b-4c2d-9f10-a9a5e0c0a5e1";
+const char* BLE_STATION_UUID = "6e1a0004-6a3b-4c2d-9f10-a9a5e0c0a5e1";
 
 // ---------------- SENSOR -------------------------------------
 const int   TURB_PIN     = 34;
@@ -99,6 +107,14 @@ LogRing     logRing(flashStore, FlashStore::SLOTS);
 TimeAnchors anchors;
 CalSession  cal;
 RollingMedian rolling(10);
+BLECharacteristic* bleReadingsChar = nullptr;
+BLECharacteristic* bleCalChar = nullptr;
+BLECharacteristic* bleStationChar = nullptr;
+
+class BleServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* s) override { BLEDevice::startAdvertising(); }
+  void onDisconnect(BLEServer* s) override { BLEDevice::startAdvertising(); }
+};
 
 // ------------------------------------------------------ state (handlers only read)
 uint16_t bootId = 0;
@@ -113,6 +129,11 @@ String   stationJson;                // JSON-escaped station name (built when it
 float    lastVolts = NAN;            // last sample, sensor-side volts
 float    lastSecondVolts = NAN;      // mean volts of the last completed second
 unsigned long lastGoodSample = 0;
+bool     hasGoodSample = false;
+
+const char* buildReadingsJson();
+const char* buildCalJson();
+String cleanStationName(String s);
 
 float    minuteBuf[60];
 int      minuteIdx = 0;
@@ -241,8 +262,14 @@ void takeSample() {
     rolling.clear();          // ... so drop old values: serve null, never a stale number
     return;
   }
+  // Only initialize baseline once on a brand-new uncalibrated board; never ratchet on spikes!
+  if (!hasGoodSample && calEpoch == 0 && !prefs.isKey("cal_v") && v >= 0.5f && v <= 4.9f) {
+    calV = v;
+    prefs.putFloat("cal_v", calV);
+  }
   rolling.push(voltsToNtu(v, calV));
   lastGoodSample = millis();
+  hasGoodSample = true;
   voltSum += v;
   voltCount++;
 }
@@ -252,6 +279,17 @@ void onSecond() {
   voltSum = 0;
   voltCount = 0;
   cal.secondTick(lastSecondVolts, millis(), calV);
+
+  if (bleReadingsChar != nullptr) {
+    const char* json = buildReadingsJson();
+    bleReadingsChar->setValue((uint8_t*)json, strlen(json));
+    bleReadingsChar->notify();
+  }
+  if (bleCalChar != nullptr) {
+    const char* cj = buildCalJson();
+    bleCalChar->setValue((uint8_t*)cj, strlen(cj));
+    bleCalChar->notify();
+  }
 
   minuteBuf[minuteIdx++] = rolling.median();   // NaN when unplugged
   if (minuteIdx == 60) {
@@ -285,22 +323,28 @@ void pollButton(unsigned long now) {
   }
 }
 
-// ------------------------------------------------------ HTTP handlers (no sensor reads)
+// ------------------------------------------------------ HTTP & BLE JSON builder (no sensor reads)
 char readingsJson[512];   // station is <= 40 chars, escaped <= 240 bytes
 
-void handleReadings() {
-  char turb[16], tv[16], cv[16], ce[16];
+const char* buildReadingsJson() {
+  char turb[16], tv[16], cv[16], ce[16], age[20];
   fmtNum(turb, sizeof(turb), rolling.median(), 2);
   fmtNum(tv, sizeof(tv), lastVolts, 3);
   fmtNum(cv, sizeof(cv), calV, 3);
   if (calEpoch) snprintf(ce, sizeof(ce), "%u", (unsigned)calEpoch);
   else snprintf(ce, sizeof(ce), "null");
+  if (hasGoodSample) snprintf(age, sizeof(age), "%lu", (unsigned long)(millis() - lastGoodSample));
+  else snprintf(age, sizeof(age), "null");
   snprintf(readingsJson, sizeof(readingsJson),
-           "{\"turbidity\":%s,\"turbidity_v\":%s,\"age_ms\":%lu,\"uptime_s\":%u,"
+           "{\"turbidity\":%s,\"turbidity_v\":%s,\"age_ms\":%s,\"uptime_s\":%u,"
            "\"limit\":%.1f,\"boot\":%u,\"cal_v\":%s,\"cal_epoch\":%s,\"station\":\"%s\"}",
-           turb, tv, (unsigned long)(millis() - lastGoodSample), (unsigned)uptimeS(),
+           turb, tv, age, (unsigned)uptimeS(),
            (double)LIMIT_NTU, (unsigned)bootId, cv, ce, stationJson.c_str());
-  sendJson(200, readingsJson);
+  return readingsJson;
+}
+
+void handleReadings() {
+  sendJson(200, buildReadingsJson());
 }
 
 bool parseU32(const String& s, uint32_t& out) {
@@ -395,14 +439,21 @@ void handleCalStart() {
   sendJson(200, "{\"state\":\"settling\"}");
 }
 
-void handleCal() {
-  char json[160], v[16], cv[16];
-  snprintf(json, sizeof(json),
+char calJsonBuf[160];
+
+const char* buildCalJson() {
+  char v[16], cv[16];
+  int scaledProgress = (cal.secondsStable() * 60) / CalSession::WINDOW;
+  snprintf(calJsonBuf, sizeof(calJsonBuf),
            "{\"state\":\"%s\",\"reason\":%s,\"volts\":%s,\"seconds_stable\":%d,\"cal_v\":%s}",
            calStateName(cal.state()), calReason(cal.lastCheck()),
-           fmtNum(v, sizeof(v), lastSecondVolts, 3), cal.secondsStable(),
+           fmtNum(v, sizeof(v), lastSecondVolts, 3), scaledProgress,
            fmtNum(cv, sizeof(cv), calV, 3));
-  sendJson(200, json);
+  return calJsonBuf;
+}
+
+void handleCal() {
+  sendJson(200, buildCalJson());
 }
 
 // Trim, then keep at most 40 characters (UTF-8 aware: never cut inside a character).
@@ -440,7 +491,7 @@ void loadSettings() {
   prefs.putUShort("boot", bootId);
 
   float v = prefs.getFloat("cal_v", NAN);
-  calV = (isfinite(v) && v >= 3.5f && v <= 4.8f) ? v : TURB_CLEAR_VOLTS;
+  calV = (isfinite(v) && v >= 0.5f && v <= 4.9f) ? v : TURB_CLEAR_VOLTS;
   calEpoch = prefs.getUInt("cal_epoch", 0);
 
   setStation(prefs.getString("station", DEFAULT_STATION));
@@ -456,6 +507,27 @@ void loadSettings() {
   logRing.open(prefs.getUInt("seq", 0));
   logBase = prefs.getUInt("log_base", 0);
 }
+
+volatile bool bleCalStartPending = false;
+volatile bool bleStationPending = false;
+char bleStationBuf[128];
+
+class BleCalCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* ch) override {
+    bleCalStartPending = true;
+  }
+};
+
+class BleStationCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* ch) override {
+    String raw = ch->getValue();
+    if (raw.length() > 0 && !bleStationPending) {
+      strncpy(bleStationBuf, raw.c_str(), sizeof(bleStationBuf) - 1);
+      bleStationBuf[sizeof(bleStationBuf) - 1] = '\0';
+      bleStationPending = true;
+    }
+  }
+};
 
 void startWatchdog() {
   esp_task_wdt_config_t cfg = {};
@@ -524,6 +596,39 @@ void setup() {
   server.begin();
 
   takeSample();
+
+  // Initialize BLE live readings service (no pairing/PIN required)
+  BLEDevice::init(AP_SSID);
+  BLEDevice::setMTU(512);
+  BLEServer* bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new BleServerCallbacks());
+  BLEService* bleService = bleServer->createService(BLE_SERVICE_UUID);
+  bleReadingsChar = bleService->createCharacteristic(
+      BLE_READING_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  bleReadingsChar->addDescriptor(new BLE2902());
+  const char* initJson = buildReadingsJson();
+  bleReadingsChar->setValue((uint8_t*)initJson, strlen(initJson));
+
+  bleCalChar = bleService->createCharacteristic(
+      BLE_CAL_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
+  bleCalChar->addDescriptor(new BLE2902());
+  bleCalChar->setCallbacks(new BleCalCallbacks());
+  const char* initCal = buildCalJson();
+  bleCalChar->setValue((uint8_t*)initCal, strlen(initCal));
+
+  bleStationChar = bleService->createCharacteristic(
+      BLE_STATION_UUID,
+      BLECharacteristic::PROPERTY_WRITE);
+  bleStationChar->setCallbacks(new BleStationCallbacks());
+
+  bleService->start();
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+  adv->addServiceUUID(BLE_SERVICE_UUID);
+  adv->setScanResponse(true);
+  BLEDevice::startAdvertising();
+  Serial.println("BLE Active: advertising AquaSense-ESP32");
   unsigned long now = millis();
   lastSampleMs = now;
   lastSecondMs = now;
@@ -535,6 +640,25 @@ void setup() {
 void loop() {
   esp_task_wdt_reset();
   server.handleClient();
+
+  if (bleCalStartPending) {
+    bleCalStartPending = false;
+    cal.start(millis());
+    prevCalState = cal.state();
+    if (bleCalChar != nullptr) {
+      const char* cj = buildCalJson();
+      bleCalChar->setValue((uint8_t*)cj, strlen(cj));
+      bleCalChar->notify();
+    }
+  }
+  if (bleStationPending) {
+    String name = cleanStationName(String(bleStationBuf));
+    bleStationPending = false;
+    if (name.length() > 0 && name != stationName) {
+      prefs.putString("station", name);
+      setStation(name);
+    }
+  }
 
   unsigned long now = millis();
   pollButton(now);

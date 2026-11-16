@@ -36,21 +36,22 @@ private const val DEFAULT_STATION = "Barangay Magosilom Water Station"
 
 /**
  * Automatic live controller. While in the foreground: joins the ESP32 Wi-Fi, polls /readings every
- * second, keeps the ESP32 clock set, imports its minute log, runs the alert engine and notifies.
- * The UI only reads the StateFlows below and calls [setForeground], [startCalibration],
- * [stopCalibration], [setStation] and [setLanguage].
+ * second (falling back to BLE live readings when Wi-Fi has not succeeded for 10 s), keeps the ESP32
+ * clock set, imports its minute log, runs the alert engine and notifies.
+ * Also exposes [joiner] and [ble] for manual Wi-Fi & Bluetooth scanning, pairing, and connecting.
  */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("aquasense", Context.MODE_PRIVATE)
     private val db = HistoryDb(app)
-    private val joiner = WifiJoiner(app)
+    val joiner = WifiJoiner(app)
+    val ble = BleClient(app)
     private val engine = AlertEngine()
     private val zone: ZoneId get() = ZoneId.systemDefault()
 
     /** R6: debug builds can point at an emulator-reachable fake ESP32 and skip the Wi-Fi join. */
     private val debugBase: String? =
         if (BuildConfig.DEBUG) prefs.getString("debug_esp_base", null)?.trim()?.takeIf { it.isNotEmpty() } else null
-    private val esp = EspClient(debugBase ?: ESP_BASE) { if (debugBase != null) null else joiner.network.value }
+    private val esp = EspClient(debugBase ?: ESP_BASE) { if (debugBase != null) null else joiner.activeNetwork() }
 
     private val _screen = MutableStateFlow<Screen>(Screen.Connecting)
     val screen: StateFlow<Screen> = _screen
@@ -85,9 +86,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Latest limit reported by the ESP32 (chart limit line, share report). */
     private val _limit = MutableStateFlow(DEFAULT_LIMIT)
     val currentLimit: StateFlow<Double> = _limit
-    /** True while connected to v3 firmware: calibration and renaming the station can work. */
+    /** True while connected to v3 firmware (over Wi-Fi or BLE): calibration and renaming the station can work. */
     private val _sensorReachable = MutableStateFlow(false)
     val sensorReachable: StateFlow<Boolean> = _sensorReachable
+    /** Active live transport (WIFI or BLE fallback). */
+    private val _transport = MutableStateFlow(Transport.WIFI)
+    val transport: StateFlow<Transport> = _transport
 
     /** In-app language (Settings chooses it); applied at once by [LocalizedApp]. */
     private val languagePrefs = LanguagePrefs(app)
@@ -108,7 +112,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             // An alert still open from an earlier process: resume it instead of re-notifying.
             try {
-                db.openAlertSince()?.let { opened -> engine.restore(opened, db.lastPointTs() ?: opened) }
+                db.openAlertSince()?.let { opened ->
+                    engine.restore(opened, db.lastPointTs() ?: opened, db.openAlertPeak())
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "alert restore failed", e)
             }
@@ -127,6 +133,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (fg) {
             if (pollJob?.isActive == true) return
             if (debugBase == null) joiner.start()
+            ble.refreshPairedDevices()
             _screen.value = Screen.Connecting
             pollJob = viewModelScope.launch { pollLoop() }
         } else {
@@ -136,33 +143,53 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             calJob?.cancel(); calJob = null
             _calSession.value = CalUiSession.Idle // polling stopped: never show a stale step on resume
             _sensorReachable.value = false
+            _transport.value = Transport.WIFI
+            ble.stopDeviceScan()
+            ble.stop()
             joiner.stop()
         }
     }
 
     /**
-     * Starts calibration on the ESP32 and polls /cal every second until the session ends or
-     * [stopCalibration]. A failed start polls nothing (the ESP32 would still report its previous
-     * result). A calibration is recorded only on DONE after a READY of this session.
+     * Starts calibration on the ESP32 (via Wi-Fi HTTP or BLE GATT) and polls /cal every second
+     * until the session ends or [stopCalibration]. A calibration is recorded only on DONE after a
+     * READY of this session.
      */
     fun startCalibration() {
         calJob?.cancel()
         _calSession.value = CalUiSession.started()
         calJob = viewModelScope.launch {
-            try { esp.calStart() } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                Log.w(TAG, "cal start failed", e)
+            val startedOk = try {
+                esp.calStart()
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ble.calStart()
+            }
+            if (!startedOk) {
+                Log.w(TAG, "cal start failed on both Wi-Fi and BLE")
                 _calSession.value = CalUiSession.startFailed()
                 return@launch
             }
             while (isActive) {
-                val s = try { esp.cal() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+                val s = try {
+                    esp.cal()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    ble.latestCal.value
+                }
                 val now = System.currentTimeMillis()
                 val prev = _calSession.value
                 val next = calSessionStep(prev, s, now)
                 _calSession.value = next
                 if (next.calibrated && !prev.calibrated) {
-                    _lastCal.value = CalEvent(now, s?.calVolts ?: Double.NaN)
+                    val calEvt = CalEvent(now, s?.calVolts ?: Double.NaN)
+                    _lastCal.value = calEvt
+                    withContext(Dispatchers.IO) { db.addCalEvents(listOf(calEvt)) }
                     updateLastCalMs()
+                    refreshHistory()
                     logDue = true // the ESP32 logs the calibration; pull it into history
                 }
                 if (next.terminal) break
@@ -186,11 +213,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (n.isEmpty()) return
         _stationFailed.value = false
         viewModelScope.launch {
-            try {
+            val ok = try {
                 esp.setStation(n)
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ble.setStation(n)
+            }
+            if (ok) {
                 updateStation(n)
-            } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                Log.w(TAG, "setStation failed", e)
+            } else {
+                Log.w(TAG, "setStation failed")
                 _stationFailed.value = true
             }
         }
@@ -221,6 +255,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         dbReady.join()
         _screen.value = Screen.Connecting
         val startedMs = System.currentTimeMillis()
+        var lastWifiOkMs: Long? = startedMs
         var failures = 0
         var reading: LiveReading? = null
         var receivedAt: Long? = null
@@ -230,13 +265,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val minuteVals = ArrayList<Double>()
         timeDue = false; logDue = false; syncSupported = true; lastLogMs = 0L; syncFailures = 0; syncJob = null
 
+        suspend fun recordLiveMinuteSample(tsMs: Long, ntu: Double) {
+            val m = tsMs / 60_000L
+            if (m != minute) {
+                if (minuteVals.isNotEmpty() && minute >= 0) {
+                    savePoint(Point(minute * 60_000L, medianOf(minuteVals)))
+                }
+                minuteVals.clear()
+                minute = m
+            }
+            minuteVals.add(ntu)
+        }
+
         while (isActive) {
             val r = try { esp.readings() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
             val now = System.currentTimeMillis() // this reading's own fetch time
             if (r == null) {
                 failures++
+                if (debugBase == null && failures % 5 == 0) joiner.start()
             } else {
                 failures = 0
+                lastWifiOkMs = now
                 // R3: on each (re)connect, sync before live samples reach the alert engine.
                 if (wasDisconnected) prevBoot = null
                 val d = onReading(prevBoot, r, syncSupported)
@@ -264,22 +313,68 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val fresh = ntu != null && (r.ageMs ?: 0L) <= READING_STALE_MS
                 if (fresh && ntu != null) {
                     lastSeen = Point(now, ntu)
-                    if (!holdLive) handle(engine.onLive(ntu, r.limit, now))
+                    if (!holdLive) {
+                        val prevPeak = engine.peak
+                        handle(engine.onLive(ntu, r.limit, now))
+                        if (engine.isOpen && engine.peak > prevPeak) {
+                            withContext(Dispatchers.IO) { db.updateOpenAlertPeak(engine.peak) }
+                            refreshHistory()
+                        }
+                    }
                     // v2 firmware (no /log): keep one median point per minute ourselves.
                     if (!r.isV3 || !syncSupported) {
-                        val m = now / 60_000L
-                        if (m != minute) {
-                            if (minuteVals.isNotEmpty() && minute >= 0) savePoint(Point(minute * 60_000L, medianOf(minuteVals)))
-                            minuteVals.clear(); minute = m
-                        }
-                        minuteVals.add(ntu)
+                        recordLiveMinuteSample(now, ntu)
                     }
                 }
             }
-            wasDisconnected = shouldShowNotConnected(failures, receivedAt, now, startedMs)
-            _sensorReachable.value = !wasDisconnected && reading?.isV3 == true && syncSupported
-            _screen.value = displayScreen(reading, receivedAt, lastSeen, failures, startedMs, now)
-            delay(if (failures == 0) POLL_MS else backoffMs(failures))
+
+            val nextTransport = if (ble.manualConnection && ble.connected.value) {
+                Transport.BLE
+            } else if (ble.connected.value && r == null) {
+                Transport.BLE
+            } else {
+                chooseTransport(_transport.value, lastWifiOkMs, now, ble.isAvailable())
+            }
+            _transport.value = nextTransport
+            if (nextTransport == Transport.BLE) {
+                ble.start()
+                val blePair = ble.latest.value
+                if ((r == null || ble.manualConnection) && blePair != null && now - blePair.second <= READING_STALE_MS) {
+                    val br = blePair.first
+                    val bTs = blePair.second
+                    reading = br
+                    receivedAt = bTs
+                    limit = br.limit
+                    _limit.value = br.limit
+                    if (br.calEpochS != null && br.calEpochS != deviceCalEpochS) {
+                        deviceCalEpochS = br.calEpochS
+                        updateLastCalMs()
+                    }
+                    br.station?.takeIf { it.isNotBlank() }?.let { updateStation(it) }
+                    val ntu = br.turbidity
+                    val fresh = ntu != null && (br.ageMs ?: 0L) <= READING_STALE_MS
+                    if (fresh && ntu != null) {
+                        lastSeen = Point(bTs, ntu)
+                        val prevPeak = engine.peak
+                        handle(engine.onLive(ntu, br.limit, bTs))
+                        if (engine.isOpen && engine.peak > prevPeak) {
+                            withContext(Dispatchers.IO) { db.updateOpenAlertPeak(engine.peak) }
+                            refreshHistory()
+                        }
+                        // Record 1-minute median points into HistoryDb while on BLE
+                        recordLiveMinuteSample(bTs, ntu)
+                    }
+                }
+            } else {
+                ble.stopIfAuto()
+            }
+
+            val effectiveFailures = if (nextTransport == Transport.BLE && receivedAt != null && now - receivedAt <= READING_STALE_MS) 0 else failures
+            wasDisconnected = shouldShowNotConnected(effectiveFailures, receivedAt, now, startedMs)
+            _sensorReachable.value = !wasDisconnected && reading?.isV3 == true &&
+                ((failures == 0 && syncSupported) || (nextTransport == Transport.BLE && ble.connected.value))
+            _screen.value = displayScreen(reading, receivedAt, lastSeen, effectiveFailures, startedMs, now)
+            delay(if (effectiveFailures == 0) POLL_MS else backoffMs(failures))
         }
     }
 
@@ -326,7 +421,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         db.addCalEvents(page.calEvents)
                     }
                 }
-                for (p in pts) handle(engine.onImported(p, limit, now))
+                for (p in pts) {
+                    val prevPeak = engine.peak
+                    handle(engine.onImported(p, limit, now))
+                    if (engine.isOpen && engine.peak > prevPeak) {
+                        withContext(Dispatchers.IO) { db.updateOpenAlertPeak(engine.peak) }
+                    }
+                }
                 when (val step = nextCursor(page, since, jumped)) {
                     is CursorStep.Done -> {
                         if (step.since != since) saveCursor(step.since)
@@ -414,6 +515,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     override fun onCleared() {
+        ble.stopDeviceScan()
+        ble.stop()
         joiner.stop()
         db.close()
     }

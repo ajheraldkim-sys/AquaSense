@@ -44,6 +44,23 @@ fun stateIcon(s: WaterState?): ImageVector? = when (s) {
     WaterState.CLOUDY -> Icons.Default.Close; null -> null
 }
 
+/** 5-level Water Clarity Classification colour & icon. */
+fun clarityColor(c: ClarityLevel?) = when (c) {
+    ClarityLevel.EXCELLENT -> Green
+    ClarityLevel.GOOD -> Blue
+    ClarityLevel.FAIR -> Yellow
+    ClarityLevel.POOR -> Orange
+    ClarityLevel.VERY_POOR -> Red
+    null -> Grey
+}
+
+fun clarityIcon(c: ClarityLevel?): ImageVector? = when (c) {
+    ClarityLevel.EXCELLENT, ClarityLevel.GOOD -> Icons.Default.Check
+    ClarityLevel.FAIR, ClarityLevel.POOR -> Icons.Default.Warning
+    ClarityLevel.VERY_POOR -> Icons.Default.Close
+    null -> null
+}
+
 /** Plain rounded surface used everywhere instead of heavy cards. */
 @Composable
 fun Panel(modifier: Modifier = Modifier, padding: Dp = 16.dp, content: @Composable ColumnScope.() -> Unit) {
@@ -66,8 +83,16 @@ fun Dot(color: Color, size: Dp = 10.dp) = Box(Modifier.size(size).background(col
  * Pulses gently while live data is flowing.
  */
 @Composable
-fun StatusOrb(state: WaterState?, pulsing: Boolean, size: Dp = 168.dp, greyMark: String = "?", greyIcon: ImageVector? = null) {
-    val color by animateColorAsState(stateColor(state), tween(600), label = "orb")
+fun StatusOrb(
+    state: WaterState?,
+    pulsing: Boolean,
+    size: Dp = 168.dp,
+    greyMark: String = "?",
+    greyIcon: ImageVector? = null,
+    clarity: ClarityLevel? = null,
+) {
+    val targetColor = if (clarity != null) clarityColor(clarity) else stateColor(state)
+    val color by animateColorAsState(targetColor, tween(600), label = "orb")
     val t = rememberInfiniteTransition(label = "pulse")
     val pulse by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "p")
     // Decorative: the big state text right below says the same thing, so TalkBack reads it once
@@ -80,7 +105,7 @@ fun StatusOrb(state: WaterState?, pulsing: Boolean, size: Dp = 168.dp, greyMark:
             drawCircle(color.copy(alpha = 0.22f), radius = r * 0.62f)
             drawCircle(color, radius = r * 0.46f)
         }
-        val icon = stateIcon(state) ?: greyIcon
+        val icon = (if (clarity != null) clarityIcon(clarity) else stateIcon(state)) ?: greyIcon
         if (icon != null) Icon(icon, null, Modifier.size(size * 0.26f), tint = Color.White)
         else Text(greyMark, color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
     }
@@ -89,46 +114,70 @@ fun StatusOrb(state: WaterState?, pulsing: Boolean, size: Dp = 168.dp, greyMark:
 // --------------------------------------------------------------- turbidity bar
 
 /**
- * The value + a horizontal Clear → Cloudy scale: blue zone below the limit, amber close to it, red above.
- * The marker shows where the current value sits. No units or technical words: [clearLabel] / [cloudyLabel]
- * are the localized end labels.
+ * 5-level Water Clarity Classification scale bar (NTU):
+ *  - Zone 1 (0–1 NTU): Green (Excellent)
+ *  - Zone 2 (>1–5 NTU): Blue (Good — PNSDW 2017 max limit at 5 NTU)
+ *  - Zone 3 (>5–20 NTU): Yellow (Fair — exceeds limit)
+ *  - Zone 4 (>20–50 NTU): Orange (Poor — exceeds limit)
+ *  - Zone 5 (>50 NTU): Red (Very Poor — exceeds limit)
  */
 @Composable
 fun TurbidityBar(
     value: Double?, limit: Double, state: WaterState?, clearLabel: String, cloudyLabel: String,
     modifier: Modifier = Modifier,
 ) {
-    val scaleMax = maxOf(limit * 2, (value ?: 0.0) * 1.15)
+    val clarity = value?.let { clarityLevel(it) }
     val frac by animateFloatAsState(
-        if (value == null) 0f else (value / scaleMax).toFloat().coerceIn(0f, 1f), tween(700), label = "t"
+        if (value == null) 0f else clarityScaleFraction(value), tween(700), label = "t"
     )
     val track = MaterialTheme.colorScheme.surfaceVariant
-    val marker = stateColor(state)
+    val marker = if (clarity != null) clarityColor(clarity) else stateColor(state)
+    val numStr = value?.let { if (it < 100) f1(it) else it.toInt().toString() } ?: "—"
     Panel(modifier) {
-        Text(value?.let { if (it < 100) f1(it) else it.toInt().toString() } ?: "—",
-            fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 30.sp)
-        Spacer(Modifier.height(16.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+            Text(
+                stringResource(R.string.ntu_reading_fmt, numStr),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 30.sp
+            )
+            Spacer(Modifier.weight(1f))
+            Caption(stringResource(R.string.pnsdw_limit_label, plainNumber(limit)))
+        }
+        Spacer(Modifier.height(14.dp))
         Canvas(Modifier.fillMaxWidth().height(28.dp)) {
             val h = 12.dp.toPx(); val y = (size.height - h) / 2
             val r = androidx.compose.ui.geometry.CornerRadius(h / 2)
-            fun x(v: Double) = (v / scaleMax).toFloat().coerceIn(0f, 1f) * size.width
-            val xNear = x(limit * NEAR_FRACTION); val xLim = x(limit)
-            // One rounded clip so the three zones meet with clean edges (no overlapping ends).
+            val seg = size.width / 5f
             val bar = Path().apply { addRoundRect(androidx.compose.ui.geometry.RoundRect(0f, y, size.width, y + h, r)) }
             clipPath(bar) {
                 drawRect(track, Offset(0f, y), Size(size.width, h))
-                drawRect(Blue.copy(alpha = 0.35f), Offset(0f, y), Size(xNear, h))
-                drawRect(Amber.copy(alpha = 0.45f), Offset(xNear, y), Size(xLim - xNear, h))
-                drawRect(Red.copy(alpha = 0.35f), Offset(xLim, y), Size(size.width - xLim, h))
+                drawRect(Green.copy(alpha = 0.65f), Offset(0f * seg, y), Size(seg, h))
+                drawRect(Blue.copy(alpha = 0.65f), Offset(1f * seg, y), Size(seg, h))
+                drawRect(Yellow.copy(alpha = 0.75f), Offset(2f * seg, y), Size(seg, h))
+                drawRect(Orange.copy(alpha = 0.75f), Offset(3f * seg, y), Size(seg, h))
+                drawRect(Red.copy(alpha = 0.70f), Offset(4f * seg, y), Size(seg, h))
             }
+            // Mark the 5 NTU PNSDW limit boundary (at 40% width, between Good and Fair)
+            val xLimit = 2f * seg
+            drawLine(
+                color = Color.White,
+                start = Offset(xLimit, y - 2.dp.toPx()),
+                end = Offset(xLimit, y + h + 2.dp.toPx()),
+                strokeWidth = 2.dp.toPx()
+            )
             if (value != null) {
-                val cx = frac * size.width
-                drawCircle(Color.White, size.height / 2, Offset(cx.coerceIn(size.height / 2, size.width - size.height / 2), size.height / 2))
-                drawCircle(marker, size.height / 2 - 4.dp.toPx(), Offset(cx.coerceIn(size.height / 2, size.width - size.height / 2), size.height / 2))
+                val cx = (frac * size.width).coerceIn(size.height / 2, size.width - size.height / 2)
+                drawCircle(Color.White, size.height / 2, Offset(cx, size.height / 2))
+                drawCircle(marker, size.height / 2 - 4.dp.toPx(), Offset(cx, size.height / 2))
             }
         }
-        Row(Modifier.fillMaxWidth()) {
-            Caption(clearLabel, color = Grey); Spacer(Modifier.weight(1f)); Caption(cloudyLabel, color = Grey)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Caption("0", color = Grey)
+            Caption("1", color = Grey)
+            Caption("5 NTU", color = Blue)
+            Caption("20", color = Grey)
+            Caption("50+", color = Grey)
         }
     }
 }
@@ -178,20 +227,29 @@ fun TrendChart(
     }
 }
 
-/** Short "i"-sheet: what the colours mean + the limits of a cloudiness sensor. Never says "safe". */
+/** Short "i"-sheet: 5-level Water Clarity Classification + PNSDW 2017 & WHO standards + disclaimer. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutSheet(onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(start = 24.dp, end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text(stringResource(R.string.about_title), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            LegendRow(Blue, stringResource(R.string.state_clear), stringResource(R.string.about_clear))
-            LegendRow(Amber, stringResource(R.string.state_getting_cloudy), stringResource(R.string.about_getting_cloudy))
-            LegendRow(Red, stringResource(R.string.state_cloudy), stringResource(R.string.about_cloudy))
+        Column(
+            Modifier.padding(start = 24.dp, end = 24.dp, bottom = 36.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(stringResource(R.string.clarity_header), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            LegendRow(Green, stringResource(R.string.clarity_excellent), stringResource(R.string.clarity_desc_excellent))
+            LegendRow(Blue, stringResource(R.string.clarity_good), stringResource(R.string.clarity_desc_good))
+            LegendRow(Yellow, stringResource(R.string.clarity_fair), stringResource(R.string.clarity_desc_fair))
+            LegendRow(Orange, stringResource(R.string.clarity_poor), stringResource(R.string.clarity_desc_poor))
+            LegendRow(Red, stringResource(R.string.clarity_very_poor), stringResource(R.string.clarity_desc_very_poor))
             LegendRow(Grey, stringResource(R.string.about_grey_title), stringResource(R.string.about_grey))
             HorizontalDivider()
-            Text(stringResource(R.string.about_disclaimer), fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 20.sp)
+            Text(
+                stringResource(R.string.pnsdw_standard_note),
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 19.sp
+            )
         }
     }
 }
@@ -276,7 +334,10 @@ fun CalibrationSteps(
             }
             phase == CalPhase.SETTLING -> {
                 val s = cal.secondsStable.coerceIn(0, 60)
-                ProgressRing(s / 60f, stringResource(R.string.cal_progress, s))
+                val sec10 = ((s * 10) / 60).coerceIn(0, 10)
+                ProgressRing(s / 60f, stringResource(R.string.cal_progress, s)) {
+                    Text("${sec10}s", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                }
                 Text(stringResource(R.string.cal_settling), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
                 OutlinedButton(onClose) { Text(stringResource(R.string.cal_close)) }
             }

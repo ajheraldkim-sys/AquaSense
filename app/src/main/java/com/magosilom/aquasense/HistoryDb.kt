@@ -110,10 +110,23 @@ class HistoryDb(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, "histor
         writableDatabase.execSQL("UPDATE alerts SET closed = ? WHERE closed IS NULL", arrayOf<Any>(atMs))
     }
 
-    /** Opening time of the oldest still-open alert, or null. */
+    /** Raises the peak NTU of any currently open alert if [ntu] is higher. */
+    fun updateOpenAlertPeak(ntu: Double) {
+        writableDatabase.execSQL(
+            "UPDATE alerts SET peak = ? WHERE closed IS NULL AND peak < ?",
+            arrayOf<Any>(ntu, ntu)
+        )
+    }
+
+    /** Opening time and peak of the oldest still-open alert, or null. */
     fun openAlertSince(): Long? =
         readableDatabase.rawQuery("SELECT MIN(opened) FROM alerts WHERE closed IS NULL", null).use { c ->
             if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+        }
+
+    fun openAlertPeak(): Double =
+        readableDatabase.rawQuery("SELECT MAX(peak) FROM alerts WHERE closed IS NULL", null).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getDouble(0) else 0.0
         }
 
     /** Timestamp of the newest stored point, or null. */

@@ -4,11 +4,32 @@
 
 // ---- Turbidity curve -------------------------------------------------------
 float voltsToNtu(float sensorVolts, float clearVolts) {
-  float v = sensorVolts * 4.2f / clearVolts;
-  if (v >= 4.2f) return 0.0f;
-  if (v <= 2.5f) return 3000.0f;
-  float ntu = -1120.4f * v * v + 5742.3f * v - 4352.9f;
-  return ntu < 0.0f ? 0.0f : ntu;
+  if (!std::isfinite(sensorVolts) || !std::isfinite(clearVolts) || clearVolts <= 0.3f) return 0.0f;
+  float r = sensorVolts / clearVolts;
+  if (r >= 0.998f) return 0.0f;
+  if (r <= (2.5f / 4.2f)) return 3000.0f;
+  float drop = 1.0f - r;  // fractional light loss relative to calibrated clean water
+  if (drop <= 0.015f) {
+    // 0.2% .. 1.5% drop -> 0 .. 1 NTU (Excellent)
+    return (drop - 0.002f) / (0.015f - 0.002f) * 1.0f;
+  }
+  if (drop <= 0.060f) {
+    // 1.5% .. 6.0% drop -> 1 .. 5 NTU (Good)
+    return 1.0f + (drop - 0.015f) / (0.060f - 0.015f) * 4.0f;
+  }
+  if (drop <= 0.180f) {
+    // 6.0% .. 18.0% drop -> 5 .. 20 NTU (Fair)
+    return 5.0f + (drop - 0.060f) / (0.180f - 0.060f) * 15.0f;
+  }
+  if (drop <= 0.350f) {
+    // 18.0% .. 35.0% drop -> 20 .. 50 NTU (Poor)
+    return 20.0f + (drop - 0.180f) / (0.350f - 0.180f) * 30.0f;
+  }
+  // 35.0% .. 40.5% drop -> 50 .. 3000 NTU (Very Poor)
+  float maxDrop = 1.0f - (2.5f / 4.2f);
+  float frac = (drop - 0.350f) / (maxDrop - 0.350f);
+  float ntu = 50.0f + frac * 2950.0f;
+  return ntu > 3000.0f ? 3000.0f : ntu;
 }
 
 // ---- Smoothing -------------------------------------------------------------
@@ -52,6 +73,7 @@ void RollingMedian::clear() { head_ = 0; count_ = 0; }
 bool TimeAnchors::offer(uint16_t boot, uint32_t epoch, uint32_t uptimeS) {
   if (epoch < MIN_EPOCH) return false;
   if (has(boot)) return false;  // first offer wins; never modify an anchor
+  if (n_ > 0 && epoch < a_[n_ - 1].epoch) return false;  // reject backwards clock across boots
   if (n_ == MAX_ANCHORS) {
     for (int i = 1; i < n_; i++) a_[i - 1] = a_[i];
     n_--;
@@ -144,9 +166,8 @@ int LogRing::since(uint32_t seq, LogEntry* out, int max) const {
 // ---- Calibration -----------------------------------------------------------
 CalCheck checkCalibration(float candidateV, float spreadV, float currentClearV) {
   if (!std::isfinite(currentClearV) || currentClearV <= 0.0f) currentClearV = 4.20f;
-  if (!std::isfinite(candidateV) || candidateV < 3.5f || candidateV > 4.8f) return CAL_OUT_OF_RANGE;
-  if (candidateV < currentClearV - 0.15f) return CAL_TOO_LOW;
-  if (!(spreadV <= 0.03f)) return CAL_UNSTABLE;  // NaN spread counts as unstable
+  if (!std::isfinite(candidateV) || candidateV < 0.5f || candidateV > 4.9f) return CAL_OUT_OF_RANGE;
+  if (!(spreadV <= 0.10f)) return CAL_UNSTABLE;  // NaN spread counts as unstable
   return CAL_OK;
 }
 
@@ -166,7 +187,7 @@ int CalSession::secondsStable() const {
   for (int i = n_ - 1; i >= 0; i--) {
     lo = std::min(lo, w_[i]);
     hi = std::max(hi, w_[i]);
-    if (hi - lo > 0.03f) break;
+    if (hi - lo > 0.08f) break;
     count++;
   }
   return count > WINDOW ? WINDOW : count;
@@ -178,7 +199,7 @@ void CalSession::secondTick(float meanVolts, uint32_t nowMs, float currentClearV
     return;
   }
   if (state_ != CAL_SETTLING) return;
-  if (nowMs - startMs_ > 300000u) { state_ = CAL_EXPIRED; return; }
+  if (nowMs - startMs_ > 60000u) { state_ = CAL_EXPIRED; return; }
   if (!std::isfinite(meanVolts)) { n_ = 0; return; }
   if (n_ == WINDOW) {
     for (int i = 1; i < WINDOW; i++) w_[i - 1] = w_[i];
@@ -197,7 +218,7 @@ void CalSession::secondTick(float meanVolts, uint32_t nowMs, float currentClearV
   if (last_ == CAL_OK) {
     candidate_ = mean;
     readyMs_ = nowMs;
-    state_ = CAL_READY;
+    state_ = CAL_DONE;  // Auto-save immediately once stable for WINDOW seconds
   } else if (last_ != CAL_UNSTABLE) {
     candidate_ = mean;
     state_ = CAL_REJECTED;

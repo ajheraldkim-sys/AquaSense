@@ -121,7 +121,7 @@ enum CalState { CAL_IDLE, CAL_SETTLING, CAL_READY, CAL_DONE, CAL_REJECTED, CAL_E
 // second's mean voltage. Timing uses wrap-safe unsigned millis subtraction.
 class CalSession {
  public:
-  static const int WINDOW = 60;
+  static const int WINDOW = 10;
   void start(uint32_t nowMs);  // from any state: reset and enter SETTLING
   void secondTick(float meanVolts, uint32_t nowMs, float currentClearV);
   void buttonPressed(uint32_t nowMs);

@@ -4,6 +4,39 @@ import java.util.Locale
 
 enum class WaterState { CLEAR, GETTING_CLOUDY, CLOUDY }
 
+/**
+ * 5-level Water Clarity Classification based on Nephelometric Turbidity Units (NTU),
+ * aligned with WHO (< 1 NTU target) and PNSDW 2017 (5 NTU maximum allowable limit).
+ */
+enum class ClarityLevel {
+    EXCELLENT,  // 0 - 1 NTU (Green: Very clear water, meets WHO target < 1 NTU)
+    GOOD,       // > 1 - 5 NTU (Blue: Slightly cloudy, within PNSDW 5 NTU limit, monitor)
+    FAIR,       // > 5 - 20 NTU (Yellow: Noticeable cloudiness, exceeds PNSDW 5 NTU limit)
+    POOR,       // > 20 - 50 NTU (Orange: Highly cloudy, exceeds PNSDW 5 NTU limit)
+    VERY_POOR   // > 50 NTU (Red: Extremely cloudy, exceeds PNSDW 5 NTU limit)
+}
+
+fun clarityLevel(ntu: Double): ClarityLevel = when {
+    ntu <= 1.0 -> ClarityLevel.EXCELLENT
+    ntu <= 5.0 -> ClarityLevel.GOOD
+    ntu <= 20.0 -> ClarityLevel.FAIR
+    ntu <= 50.0 -> ClarityLevel.POOR
+    else -> ClarityLevel.VERY_POOR
+}
+
+/** Maps an NTU value to a 0..1 position across the 5 equal-width visual zones (0-1, 1-5, 5-20, 20-50, 50-100+). */
+fun clarityScaleFraction(ntu: Double): Float {
+    val v = ntu.coerceAtLeast(0.0)
+    val f = when {
+        v <= 1.0 -> 0.20 * (v / 1.0)
+        v <= 5.0 -> 0.20 + 0.20 * ((v - 1.0) / 4.0)
+        v <= 20.0 -> 0.40 + 0.20 * ((v - 5.0) / 15.0)
+        v <= 50.0 -> 0.60 + 0.20 * ((v - 20.0) / 30.0)
+        else -> 0.80 + 0.20 * ((v - 50.0) / 50.0).coerceAtMost(1.0)
+    }
+    return f.toFloat().coerceIn(0f, 1f)
+}
+
 /** Above this fraction of the limit the water is "Getting cloudy". */
 const val NEAR_FRACTION = 0.8
 

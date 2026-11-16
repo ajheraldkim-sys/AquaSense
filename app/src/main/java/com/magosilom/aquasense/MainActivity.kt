@@ -35,16 +35,24 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 33 && savedInstanceState == null)
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        if (savedInstanceState == null) {
+            val perms = buildList {
+                if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                addAll(blePermissionsForRuntime())
+            }.toTypedArray()
+            if (perms.isNotEmpty()) requestPermissions(perms, 1)
+        }
         setContent { AquaTheme { AquaApp() } }
     }
 }
 
 // ------------------------------------------------------------------ palette
-// Status colours. "Within limits" is deliberately blue, not green: the app never says "safe".
+// 5-tier Water Clarity Classification colours (0-1 Green, >1-5 Blue, >5-20 Yellow, >20-50 Orange, >50 Red).
+val Green = Color(0xFF16A34A)
 val Blue = Color(0xFF1E7FD0)
+val Yellow = Color(0xFFEAB308)
 val Amber = Color(0xFFE39A12)
+val Orange = Color(0xFFF97316)
 val Red = Color(0xFFD9483B)
 val Grey = Color(0xFF9AA7B2)
 /** Amber for text on the light background (~5:1); plain [Amber] is only for dots and shapes. */

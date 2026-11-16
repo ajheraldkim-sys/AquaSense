@@ -111,6 +111,22 @@
     <string name="cal_never">Never calibrated</string>
     <string name="cal_reminder">Calibrate the sensor every 30 days. It\'s time now.</string>
     <string name="sensor_ok">Sensor is working</string>
+    <string name="via_bluetooth">via Bluetooth</string>
+    <string name="conn_title">Wi-Fi and Bluetooth</string>
+    <string name="conn_scan_wifi">Scan Wi-Fi</string>
+    <string name="conn_scanning">Scanning…</string>
+    <string name="conn_scan_bt">Scan Bluetooth</string>
+    <string name="conn_stop_scan">Stop scan</string>
+    <string name="conn_connect">Connect</string>
+    <string name="conn_disconnect">Disconnect</string>
+    <string name="conn_connected">Connected</string>
+    <string name="conn_pair">Pair</string>
+    <string name="conn_unpair">Unpair</string>
+    <string name="conn_paired">Paired</string>
+    <string name="conn_pairing">Pairing…</string>
+    <string name="conn_password">Wi-Fi password</string>
+    <string name="conn_cancel">Cancel</string>
+    <string name="conn_turn_on_bt">Turn on Bluetooth</string>
     <string name="cal_step1">Put the sensor in clean bottled water</string>
     <string name="cal_start">Start</string>
     <string name="cal_starting">Starting…</string>
@@ -129,4 +145,22 @@
     <string name="cal_close">Close</string>
     <string name="cal_try_again">Try again</string>
     <string name="cal_needs_wifi">Calibration needs the sensor\'s Wi-Fi</string>
+
+    <!-- 5-Level Water Clarity Classification & PNSDW 2017 / WHO Standards -->
+    <string name="clarity_header">Water Clarity Classification</string>
+    <string name="clarity_excellent">Excellent</string>
+    <string name="clarity_good">Good</string>
+    <string name="clarity_fair">Fair</string>
+    <string name="clarity_poor">Poor</string>
+    <string name="clarity_very_poor">Very Poor</string>
+    <string name="clarity_desc_excellent">Very clear water (0–1 NTU) · Meets WHO target (&lt; 1 NTU) and PNSDW limit (≤ 5 NTU)</string>
+    <string name="clarity_desc_good">Slightly cloudy (&gt;1–5 NTU) · Acceptable turbidity range (PNSDW ≤ 5 NTU), but monitor</string>
+    <string name="clarity_desc_fair">Noticeable cloudiness (&gt;5–20 NTU) · Exceeds 5 NTU Philippine drinking-water limit</string>
+    <string name="clarity_desc_poor">Highly cloudy (&gt;20–50 NTU) · Exceeds 5 NTU Philippine drinking-water limit</string>
+    <string name="clarity_desc_very_poor">Extremely cloudy (&gt;50 NTU) · Exceeds 5 NTU Philippine drinking-water limit</string>
+    <string name="pnsdw_warning_title">Exceeds Philippine Drinking-Water Limit (5 NTU)</string>
+    <string name="pnsdw_warning_body">Reading (%1$s NTU) is above the PNSDW 2017 maximum allowable turbidity of %2$s NTU. Use stored or boiled water and confirm with laboratory testing.</string>
+    <string name="pnsdw_standard_note">Philippine National Standards for Drinking Water (PNSDW 2017): Maximum allowable turbidity is 5 NTU (Department of Health). WHO recommends a target of less than 1 NTU for effective disinfection. These display categories are illustrative; turbidity alone cannot determine whether water is fit to drink. Microbiological and chemical testing is still necessary.</string>
+    <string name="ntu_reading_fmt">%1$s NTU</string>
+    <string name="pnsdw_limit_label">PNSDW limit: %1$s NTU · WHO target: &lt; 1 NTU</string>
 </resources>

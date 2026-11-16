@@ -41,7 +41,7 @@ fun calSessionStep(state: CalUiSession, status: CalStatus?, nowMs: Long): CalUiS
             !state.seenProgress -> state // stale result of an earlier calibration
             else -> state.copy(
                 status = status,
-                calibrated = status.phase == CalPhase.DONE && state.readyAtMs != null,
+                calibrated = status.phase == CalPhase.DONE,
             )
         }
     }

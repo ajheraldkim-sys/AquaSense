@@ -44,4 +44,17 @@ class StatusTest {
         assertFalse(needsCleaning(listOf(2.1)))
         assertFalse(needsCleaning(listOf(0.2, 0.5, 0.9)))
     }
+
+    @Test fun fiveLevelWaterClarityThresholds() {
+        assertEquals(ClarityLevel.EXCELLENT, clarityLevel(0.0))
+        assertEquals(ClarityLevel.EXCELLENT, clarityLevel(1.0))
+        assertEquals(ClarityLevel.GOOD, clarityLevel(1.01))
+        assertEquals(ClarityLevel.GOOD, clarityLevel(5.0))
+        assertEquals(ClarityLevel.FAIR, clarityLevel(5.01))
+        assertEquals(ClarityLevel.FAIR, clarityLevel(20.0))
+        assertEquals(ClarityLevel.POOR, clarityLevel(20.01))
+        assertEquals(ClarityLevel.POOR, clarityLevel(50.0))
+        assertEquals(ClarityLevel.VERY_POOR, clarityLevel(50.01))
+        assertEquals(ClarityLevel.VERY_POOR, clarityLevel(250.0))
+    }
 }

@@ -13,8 +13,9 @@ class AlertEngine(
 ) {
     var isOpen: Boolean = false
         private set
+    var peak: Double = 0.0
+        private set
     private var runStart: Long? = null
-    private var peak = 0.0
     private var clearStart: Long? = null
     private var lastT = Long.MIN_VALUE
 
@@ -23,9 +24,10 @@ class AlertEngine(
      * ongoing cloudy episode does not notify again and the normal 10-minute clear closes it.
      * [lastTs] = newest stored point (or [openedMs]); older samples are then ignored.
      */
-    fun restore(openedMs: Long, lastTs: Long) {
+    fun restore(openedMs: Long, lastTs: Long, initialPeak: Double = 0.0) {
         isOpen = true
         runStart = openedMs
+        peak = initialPeak
         clearStart = null
         lastT = maxOf(lastTs, openedMs)
     }
@@ -58,7 +60,10 @@ class AlertEngine(
         lastT = p.tsMs
         if (p.ntu > limit) {
             clearStart = null
-            if (isOpen) return null
+            if (isOpen) {
+                if (p.ntu > peak) peak = p.ntu
+                return null
+            }
             isOpen = true
             runStart = p.tsMs
             peak = p.ntu

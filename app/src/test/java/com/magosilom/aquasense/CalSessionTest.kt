@@ -43,11 +43,11 @@ class CalSessionTest {
         assertTrue(s.calibrated)
     }
 
-    @Test fun doneWithoutReadyIsNotRecorded() {
+    @Test fun autoSavedDoneAfterSettlingIsRecorded() {
         var s = calSessionStep(CalUiSession.started(), st(CalPhase.SETTLING), 1)
         s = calSessionStep(s, st(CalPhase.DONE), 2)
         assertEquals(CalPhase.DONE, s.phase)
-        assertFalse(s.calibrated)
+        assertTrue(s.calibrated)
     }
 
     @Test fun rejectedAfterSettlingIsShown() {
