@@ -67,13 +67,29 @@ class WifiJoiner(ctx: Context) {
     private var targetSsid: String = AQUASENSE_SSID
     private var targetPass: String? = AQUASENSE_PASS
 
-    /** Returns the bound specifier network, or any active Wi-Fi network if joined via system Wi-Fi. */
+    /**
+     * Returns the bound specifier network, or a system Wi-Fi network only if it is on the
+     * ESP32 SoftAP subnet (`192.168.4.x`) or matches the target SSID. Never routes `192.168.4.1`
+     * over a home/office router where requests hang or hit an upstream 404.
+     */
     fun activeNetwork(): Network? {
         _network.value?.let { return it }
         return try {
             @Suppress("DEPRECATION")
+            val curSsid = wifiManager.connectionInfo?.ssid?.removePrefix("\"")?.removeSuffix("\"")
+            val ssidMatches = !curSsid.isNullOrBlank() && (
+                curSsid.equals(targetSsid, ignoreCase = true) ||
+                    curSsid.contains("AquaSense", ignoreCase = true) ||
+                    curSsid.contains("ESP32", ignoreCase = true)
+                )
+            @Suppress("DEPRECATION")
             cm.allNetworks.firstOrNull { net ->
-                cm.getNetworkCapabilities(net)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                val caps = cm.getNetworkCapabilities(net) ?: return@firstOrNull false
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return@firstOrNull false
+                val onApSubnet = cm.getLinkProperties(net)?.linkAddresses?.any { la ->
+                    la.address?.hostAddress?.startsWith("192.168.4.") == true
+                } == true
+                onApSubnet || ssidMatches
             }
         } catch (_: Exception) {
             null

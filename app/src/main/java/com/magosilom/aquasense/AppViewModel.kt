@@ -181,14 +181,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             while (isActive) {
                 val onBleNow = _transport.value == Transport.BLE && ble.connected.value
                 val s = if (onBleNow) {
-                    ble.latestCal.value
+                    ble.readCal() ?: ble.latestCal.value
                 } else {
                     try {
                         esp.cal()
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        ble.latestCal.value
+                        ble.readCal() ?: ble.latestCal.value
                     }
                 }
                 val now = System.currentTimeMillis()
@@ -294,7 +294,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         while (isActive) {
-            val r = try { esp.readings() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+            val r = if (ble.manualConnection && ble.connected.value) {
+                null
+            } else {
+                try { esp.readings() } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+            }
             val now = System.currentTimeMillis() // this reading's own fetch time
             if (r == null) {
                 failures++
@@ -303,6 +307,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 lastWifiOkMs = now
                 // R3: on each (re)connect, sync before live samples reach the alert engine.
                 if (wasDisconnected) prevBoot = null
+                if (r.isV3 && prevBoot != r.boot) syncSupported = true
                 val d = onReading(prevBoot, r, syncSupported)
                 prevBoot = r.boot
                 if (d.sendTime) timeDue = true
@@ -353,8 +358,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _transport.value = nextTransport
             if (nextTransport == Transport.BLE) {
                 ble.start()
+                val curBle = ble.latest.value
+                if (ble.connected.value && (curBle == null || now - curBle.second > 1500L)) {
+                    ble.readReadings()
+                }
                 val blePair = ble.latest.value
-                if ((r == null || ble.manualConnection) && blePair != null && now - blePair.second <= READING_STALE_MS) {
+                val freshNow = System.currentTimeMillis()
+                if ((r == null || ble.manualConnection) && blePair != null && freshNow - blePair.second <= READING_STALE_MS) {
                     val br = blePair.first
                     val bTs = blePair.second
                     reading = br
@@ -384,11 +394,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 ble.stopIfAuto()
             }
 
-            val effectiveFailures = if (nextTransport == Transport.BLE && receivedAt != null && now - receivedAt <= READING_STALE_MS) 0 else failures
-            wasDisconnected = shouldShowNotConnected(effectiveFailures, receivedAt, now, startedMs)
+            val loopNow = System.currentTimeMillis()
+            val effectiveFailures = if (nextTransport == Transport.BLE && receivedAt != null && loopNow - receivedAt <= READING_STALE_MS) 0 else failures
+            wasDisconnected = shouldShowNotConnected(effectiveFailures, receivedAt, loopNow, startedMs)
             _sensorReachable.value = !wasDisconnected && reading?.isV3 == true &&
                 ((failures == 0 && syncSupported) || (nextTransport == Transport.BLE && ble.connected.value))
-            _screen.value = displayScreen(reading, receivedAt, lastSeen, effectiveFailures, startedMs, now)
+            _screen.value = displayScreen(reading, receivedAt, lastSeen, effectiveFailures, startedMs, loopNow)
             delay(if (effectiveFailures == 0) POLL_MS else backoffMs(failures))
         }
     }

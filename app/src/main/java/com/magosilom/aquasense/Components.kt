@@ -334,7 +334,7 @@ fun CalibrationSteps(
             }
             phase == CalPhase.SETTLING -> {
                 val s = cal.secondsStable.coerceIn(0, 60)
-                val sec10 = ((s * 10) / 60).coerceIn(0, 10)
+                val sec10 = ((s * 10f) / 60f + 0.5f).toInt().coerceIn(0, 10)
                 ProgressRing(s / 60f, stringResource(R.string.cal_progress, s)) {
                     Text("${sec10}s", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 }

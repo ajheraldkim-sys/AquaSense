@@ -38,8 +38,8 @@ class EspClient(
         val net = network()
         val c = (net?.openConnection(u) ?: u.openConnection()) as HttpURLConnection
         try {
-            c.connectTimeout = 3000
-            c.readTimeout = 3000
+            c.connectTimeout = 1500
+            c.readTimeout = 1500
             c.useCaches = false
             c.setRequestProperty("Connection", "close")
             c.requestMethod = method

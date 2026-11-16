@@ -274,22 +274,30 @@ void takeSample() {
   voltCount++;
 }
 
+void notifyBleReadings() {
+  if (bleReadingsChar != nullptr) {
+    const char* json = buildReadingsJson();
+    bleReadingsChar->setValue((uint8_t*)json, strlen(json));
+    bleReadingsChar->notify();
+  }
+}
+
+void notifyBleCal() {
+  if (bleCalChar != nullptr) {
+    const char* cj = buildCalJson();
+    bleCalChar->setValue((uint8_t*)cj, strlen(cj));
+    bleCalChar->notify();
+  }
+}
+
 void onSecond() {
   lastSecondVolts = voltCount > 0 ? voltSum / voltCount : NAN;
   voltSum = 0;
   voltCount = 0;
   cal.secondTick(lastSecondVolts, millis(), calV);
 
-  if (bleReadingsChar != nullptr) {
-    const char* json = buildReadingsJson();
-    bleReadingsChar->setValue((uint8_t*)json, strlen(json));
-    bleReadingsChar->notify();
-  }
-  if (bleCalChar != nullptr) {
-    const char* cj = buildCalJson();
-    bleCalChar->setValue((uint8_t*)cj, strlen(cj));
-    bleCalChar->notify();
-  }
+  notifyBleReadings();
+  notifyBleCal();
 
   minuteBuf[minuteIdx++] = rolling.median();   // NaN when unplugged
   if (minuteIdx == 60) {
@@ -311,6 +319,8 @@ void onCalibrationDone() {
   prefs.putUInt("cal_epoch", calEpoch);
   rolling.clear();            // old samples used the previous calibration
   appendLog(calV, 1);
+  notifyBleCal();
+  notifyBleReadings();
   Serial.printf("[CAL] saved clear-water voltage %.3f V\n", calV);
 }
 
@@ -478,6 +488,7 @@ void handleStation() {
   if (name != stationName) {
     prefs.putString("station", name);
     setStation(name);
+    notifyBleReadings();
   }
   sendJson(200, "{\"ok\":true}");
 }
@@ -514,6 +525,8 @@ char bleStationBuf[128];
 
 class BleCalCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* ch) override {
+    const char* cj = buildCalJson();
+    ch->setValue((uint8_t*)cj, strlen(cj));
     bleCalStartPending = true;
   }
 };
@@ -521,7 +534,7 @@ class BleCalCallbacks : public BLECharacteristicCallbacks {
 class BleStationCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* ch) override {
     String raw = ch->getValue();
-    if (raw.length() > 0 && !bleStationPending) {
+    if (raw.length() > 0) {
       strncpy(bleStationBuf, raw.c_str(), sizeof(bleStationBuf) - 1);
       bleStationBuf[sizeof(bleStationBuf) - 1] = '\0';
       bleStationPending = true;
@@ -645,18 +658,15 @@ void loop() {
     bleCalStartPending = false;
     cal.start(millis());
     prevCalState = cal.state();
-    if (bleCalChar != nullptr) {
-      const char* cj = buildCalJson();
-      bleCalChar->setValue((uint8_t*)cj, strlen(cj));
-      bleCalChar->notify();
-    }
+    notifyBleCal();
   }
   if (bleStationPending) {
-    String name = cleanStationName(String(bleStationBuf));
     bleStationPending = false;
+    String name = cleanStationName(String(bleStationBuf));
     if (name.length() > 0 && name != stationName) {
       prefs.putString("station", name);
       setStation(name);
+      notifyBleReadings();
     }
   }
 

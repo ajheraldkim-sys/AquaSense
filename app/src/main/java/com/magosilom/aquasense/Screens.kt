@@ -1,5 +1,6 @@
 package com.magosilom.aquasense
 
+import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.content.Intent
@@ -696,7 +697,7 @@ private fun ConnectionsPanel(vm: AppViewModel) {
             OutlinedButton(
                 onClick = {
                     pendingAction = { vm.joiner.scan() }
-                    permLauncher.launch(blePermissionsForRuntime())
+                    permLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
                 },
                 modifier = Modifier.weight(1f),
                 enabled = !wifiScanning

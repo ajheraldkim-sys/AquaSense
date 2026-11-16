@@ -31,6 +31,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 
@@ -112,7 +114,9 @@ class BleClient(ctx: Context) {
         private set
     @Volatile private var scanning = false
     @Volatile private var gatt: BluetoothGatt? = null
+    private val gattMutex = Mutex()
     @Volatile private var pendingWriteDone: CompletableDeferred<Boolean>? = null
+    @Volatile private var pendingReadDone: CompletableDeferred<Boolean>? = null
     private var retryJob: Job? = null
     private var failures = 0
 
@@ -310,24 +314,17 @@ class BleClient(ctx: Context) {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 failures = 0
-                _connected.value = true
-                val dev = g.device
-                if (dev != null) {
-                    upsertDevice(dev, null)
-                    _connectedDevice.value = ScannedBtDevice(
-                        name = safeName(dev),
-                        address = dev.address,
-                        bondState = try { dev.bondState } catch (_: Exception) { BluetoothDevice.BOND_NONE },
-                    )
-                }
+                g.device?.let { upsertDevice(it, null) }
                 try {
-                    if (!g.requestMtu(247)) g.discoverServices()
+                    if (!g.requestMtu(512)) g.discoverServices()
                 } catch (_: Exception) {
                     try { g.discoverServices() } catch (_: Exception) {}
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 _connected.value = false
                 _connectedDevice.value = null
+                pendingWriteDone?.complete(false)
+                pendingReadDone?.complete(false)
                 try { g.close() } catch (_: Exception) {}
                 if (gatt === g) gatt = null
                 if (running) scheduleRetry()
@@ -339,9 +336,27 @@ class BleClient(ctx: Context) {
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) return
-            val svc = g.getService(serviceUuid) ?: return
-            val ch = svc.getCharacteristic(readingUuid) ?: return
+            val svc = if (status == BluetoothGatt.GATT_SUCCESS) g.getService(serviceUuid) else null
+            val ch = svc?.getCharacteristic(readingUuid)
+            if (svc == null || ch == null) {
+                // Not an AquaSense device: disconnect and release manual lock
+                manualConnection = false
+                _connected.value = false
+                _connectedDevice.value = null
+                if (gatt === g) gatt = null
+                try { g.disconnect(); g.close() } catch (_: Exception) {}
+                return
+            }
+            _connected.value = true
+            val dev = g.device
+            if (dev != null) {
+                upsertDevice(dev, null)
+                _connectedDevice.value = ScannedBtDevice(
+                    name = safeName(dev),
+                    address = dev.address,
+                    bondState = try { dev.bondState } catch (_: Exception) { BluetoothDevice.BOND_NONE },
+                )
+            }
             enableCharacteristicNotify(g, ch)
         }
 
@@ -349,8 +364,7 @@ class BleClient(ctx: Context) {
             val ch = descriptor.characteristic ?: return
             if (ch.uuid == readingUuid) {
                 val calCh = g.getService(serviceUuid)?.getCharacteristic(calUuid)
-                if (calCh != null) {
-                    enableCharacteristicNotify(g, calCh)
+                if (calCh != null && enableCharacteristicNotify(g, calCh)) {
                     return
                 }
                 try {
@@ -376,6 +390,7 @@ class BleClient(ctx: Context) {
                 @Suppress("DEPRECATION")
                 handleCharacteristicBytes(characteristic.uuid, characteristic.value)
             }
+            pendingReadDone?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
 
         override fun onCharacteristicRead(
@@ -385,6 +400,7 @@ class BleClient(ctx: Context) {
             status: Int,
         ) {
             if (status == BluetoothGatt.GATT_SUCCESS) handleCharacteristicBytes(characteristic.uuid, value)
+            pendingReadDone?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
 
         @Deprecated("Deprecated in API 33")
@@ -413,24 +429,33 @@ class BleClient(ctx: Context) {
         }
     }
 
-    private fun enableCharacteristicNotify(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
-        try {
+    private fun enableCharacteristicNotify(g: BluetoothGatt, ch: BluetoothGattCharacteristic): Boolean {
+        return try {
             g.setCharacteristicNotification(ch, true)
             val desc = ch.getDescriptor(cccdUuid)
             if (desc != null) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    g.writeDescriptor(desc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    g.writeDescriptor(desc, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ==
+                        android.bluetooth.BluetoothStatusCodes.SUCCESS
                 } else {
                     @Suppress("DEPRECATION")
                     desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                     @Suppress("DEPRECATION")
                     g.writeDescriptor(desc)
                 }
+                if (!ok) {
+                    @Suppress("DEPRECATION")
+                    g.readCharacteristic(ch)
+                }
+                ok
             } else {
                 @Suppress("DEPRECATION")
                 g.readCharacteristic(ch)
+                false
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun handleCharacteristicBytes(uuid: UUID, bytes: ByteArray?) {
@@ -449,6 +474,22 @@ class BleClient(ctx: Context) {
         } catch (_: Exception) {}
     }
 
+    /** Actively reads [BLE_READING] over GATT (uses ATT Long Read if MTU is small). */
+    suspend fun readReadings(): LiveReading? {
+        val g = gatt ?: return null
+        val ch = g.getService(serviceUuid)?.getCharacteristic(readingUuid) ?: return null
+        if (!readCharacteristicSuspend(g, ch)) return null
+        return _latest.value?.first
+    }
+
+    /** Actively reads [BLE_CAL] over GATT (uses ATT Long Read if MTU is small). */
+    suspend fun readCal(): CalStatus? {
+        val g = gatt ?: return null
+        val ch = g.getService(serviceUuid)?.getCharacteristic(calUuid) ?: return null
+        if (!readCharacteristicSuspend(g, ch)) return _latestCal.value
+        return _latestCal.value
+    }
+
     /** Starts calibration over BLE GATT by writing `"START"` to [BLE_CAL]. */
     suspend fun calStart(): Boolean {
         val g = gatt ?: return false
@@ -463,11 +504,32 @@ class BleClient(ctx: Context) {
         return writeCharacteristicSuspend(g, ch, name.toByteArray(Charsets.UTF_8))
     }
 
+    private suspend fun readCharacteristicSuspend(
+        g: BluetoothGatt,
+        ch: BluetoothGattCharacteristic,
+    ): Boolean = gattMutex.withLock {
+        val def = CompletableDeferred<Boolean>()
+        pendingReadDone = def
+        val started = try {
+            @Suppress("DEPRECATION")
+            g.readCharacteristic(ch)
+        } catch (_: Exception) {
+            false
+        }
+        if (!started) {
+            pendingReadDone = null
+            return@withLock false
+        }
+        val res = withTimeoutOrNull(2500L) { def.await() } ?: false
+        pendingReadDone = null
+        res
+    }
+
     private suspend fun writeCharacteristicSuspend(
         g: BluetoothGatt,
         ch: BluetoothGattCharacteristic,
         payload: ByteArray,
-    ): Boolean {
+    ): Boolean = gattMutex.withLock {
         val def = CompletableDeferred<Boolean>()
         pendingWriteDone = def
         val started = try {
@@ -484,9 +546,11 @@ class BleClient(ctx: Context) {
         }
         if (!started) {
             pendingWriteDone = null
-            return false
+            return@withLock false
         }
-        return withTimeoutOrNull(3000L) { def.await() } ?: false
+        val res = withTimeoutOrNull(3000L) { def.await() } ?: false
+        pendingWriteDone = null
+        res
     }
 
     @Synchronized
