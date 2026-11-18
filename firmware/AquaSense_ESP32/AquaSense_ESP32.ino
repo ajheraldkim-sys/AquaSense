@@ -268,6 +268,11 @@ void takeSample() {
     steadyHighCount = 0;
     return;
   }
+  // If calV was latched high (> 2.0 V) from a rail clamp and the sensor is now in its normal 0.3-1.5 V divider range, reset calV
+  if (calV > 2.0f && v >= 0.35f && v <= 1.50f) {
+    calV = v;
+    prefs.putFloat("cal_v", calV);
+  }
   // Reset baseline on first boot sample if current reading is lower/higher than a stale uncalibrated calV
   if (!hasGoodSample && v >= 0.15f && v <= 4.50f && (calEpoch == 0 || v > calV + 0.06f)) {
     calV = v;
